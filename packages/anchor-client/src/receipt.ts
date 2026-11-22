@@ -123,3 +123,4 @@ export function decodeReceipt(buf: Buffer): ReceiptData {
 export function hashReceipt(receiptBytes: Buffer): Buffer {
   return createHash("sha256").update(receiptBytes).digest();
 }
+

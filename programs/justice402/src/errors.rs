@@ -59,3 +59,4 @@ pub enum JusticeError {
     #[msg("Requested amount exceeds available unreserved bond")]
     InsufficientWithdrawBalance,
 }
+

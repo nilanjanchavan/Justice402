@@ -79,3 +79,4 @@ pub mod justice402 {
         handle_withdraw_bond(ctx, amount)
     }
 }
+

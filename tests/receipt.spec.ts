@@ -60,3 +60,4 @@ describe("Receipt Canonical Encoding & Vector Tests", () => {
     expect(() => decodeReceipt(invalidLong)).to.throw(/Invalid buffer length/);
   });
 });
+

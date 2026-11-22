@@ -48,3 +48,4 @@ pub struct BondWithdrawn {
     pub amount: u64,
     pub remaining_bond: u64,
 }
+

@@ -45,3 +45,4 @@ In x402 V2, the settlement transaction signature is provided in the `PAYMENT-RES
 
 ## 5. Test Vectors
 See `tests/receipt_vectors.json` for deterministic test vectors shared between Rust unit tests and TypeScript tests.
+
