@@ -1,0 +1,23 @@
+[toolchain]
+anchor_version = "1.0.0"
+package_manager = "npm"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+justice402 = "2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ"
+
+[programs.devnet]
+justice402 = "2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ"
+
+[provider]
+cluster = "localnet"
+wallet = "./id.json"
+
+[test]
+startup_wait = 10000
+
+[scripts]
+test = "npm test"

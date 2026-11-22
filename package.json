@@ -1,0 +1,25 @@
+{
+  "name": "justice402",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "test": "npx mocha -r ts-node/register -t 60000 tests/receipt.spec.ts tests/justice402.ts"
+  },
+  "devDependencies": {
+    "@anchor-lang/core": "^1.2.2",
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.98.0",
+    "@types/bn.js": "^5.1.5",
+    "@types/chai": "^4.3.11",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.11.0",
+    "chai": "^4.3.7",
+    "mocha": "^10.2.0",
+    "ts-mocha": "^10.0.0",
+    "typescript": "^5.3.3"
+  }
+}

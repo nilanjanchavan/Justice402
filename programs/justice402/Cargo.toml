@@ -1,0 +1,29 @@
+[package]
+name = "justice402"
+version = "0.1.0"
+description = "Justice402 accountability layer for x402"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "justice402"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+anchor-lang = { version = "1.0.0", features = ["init-if-needed"] }
+anchor-spl = { version = "1.0.0", features = ["token"] }
+solana-instructions-sysvar = "3.0"
+sha2 = "0.10"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
