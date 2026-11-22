@@ -34,6 +34,7 @@ pub struct ClaimTimeout<'info> {
     #[account(
         mut,
         token::mint = config.usdc_mint,
+        token::authority = buyer,
     )]
     pub buyer_token_account: Account<'info, TokenAccount>,
 

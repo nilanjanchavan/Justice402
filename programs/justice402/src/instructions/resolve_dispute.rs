@@ -51,6 +51,11 @@ pub fn handle_resolve_dispute(
     require!(ctx.accounts.dispute.status == DisputeStatus::Open, JusticeError::DisputeNotOpen);
     require_keys_eq!(ctx.accounts.dispute.provider, ctx.accounts.provider.wallet, JusticeError::WrongSigner);
 
+    let timeout_deadline = ctx.accounts.dispute.opened_at
+        .checked_add(ctx.accounts.config.resolve_timeout)
+        .ok_or(JusticeError::MathOverflow)?;
+    require!(clock.unix_timestamp < timeout_deadline, JusticeError::ResolveTimeoutElapsed);
+
     let dispute = &mut ctx.accounts.dispute;
     let provider = &mut ctx.accounts.provider;
     let claim_amount = dispute.claim_amount;
@@ -58,6 +63,11 @@ pub fn handle_resolve_dispute(
 
     match ruling {
         Ruling::BuyerWins => {
+            require_keys_eq!(
+                ctx.accounts.buyer_token_account.owner,
+                dispute.buyer,
+                JusticeError::UnauthorizedBuyer
+            );
             payout = claim_amount;
 
             // Transfer payout to buyer from vault

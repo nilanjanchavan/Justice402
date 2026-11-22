@@ -7,6 +7,7 @@ use crate::events::DisputeOpened;
 use crate::errors::JusticeError;
 
 pub const ED25519_PROGRAM_ID: Pubkey = pubkey!("Ed25519SigVerify111111111111111111111111111");
+pub const MAX_PERMITTED_CLOCK_SKEW: i64 = 60; // 60 seconds permitted clock drift
 
 #[derive(Accounts)]
 #[instruction(receipt: Receipt, evidence_hash: [u8; 32])]
@@ -51,11 +52,21 @@ pub fn handle_open_dispute(
     require_keys_eq!(ctx.accounts.buyer.key(), receipt.buyer, JusticeError::UnauthorizedBuyer);
     require_keys_eq!(ctx.accounts.provider.wallet, receipt.provider, JusticeError::WrongSigner);
 
-    // 2. Validate dispute window
+    // 2. Validate dispute window and reject future-dated receipts exceeding clock skew
+    let max_future_time = clock.unix_timestamp
+        .checked_add(MAX_PERMITTED_CLOCK_SKEW)
+        .ok_or(JusticeError::MathOverflow)?;
+    require!(receipt.timestamp <= max_future_time, JusticeError::InvalidReceipt);
+
     let expiry = receipt.timestamp
         .checked_add(ctx.accounts.config.dispute_window)
         .ok_or(JusticeError::MathOverflow)?;
     require!(clock.unix_timestamp <= expiry, JusticeError::WindowExpired);
+
+    // Validate that opened_at + resolve_timeout produces a representable deadline
+    clock.unix_timestamp
+        .checked_add(ctx.accounts.config.resolve_timeout)
+        .ok_or(JusticeError::MathOverflow)?;
 
     // 3. Validate and introspect Ed25519 signature verification instruction
     let canonical_bytes = receipt.to_canonical_bytes();
@@ -110,7 +121,9 @@ fn verify_ed25519_introspection(
 ) -> Result<()> {
     let current_index = load_current_index_checked(instructions_sysvar)?;
 
+    let mut last_error: Option<Error> = None;
     let mut verified = false;
+
     for idx in 0..current_index {
         let ix = match load_instruction_at_checked(idx as usize, instructions_sysvar) {
             Ok(ix) => ix,
@@ -118,14 +131,27 @@ fn verify_ed25519_introspection(
         };
 
         if ix.program_id == ED25519_PROGRAM_ID {
-            verify_single_ed25519_data(&ix.data, expected_message, expected_signer)?;
-            verified = true;
-            break;
+            match verify_single_ed25519_data(&ix.data, expected_message, expected_signer) {
+                Ok(_) => {
+                    verified = true;
+                    break;
+                }
+                Err(err) => {
+                    last_error = Some(err);
+                }
+            }
         }
     }
 
-    require!(verified, JusticeError::MissingEd25519Instruction);
-    Ok(())
+    if verified {
+        return Ok(());
+    }
+
+    if let Some(err) = last_error {
+        return Err(err);
+    }
+
+    err!(JusticeError::MissingEd25519Instruction)
 }
 
 fn verify_single_ed25519_data(

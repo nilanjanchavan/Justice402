@@ -47,6 +47,9 @@ pub enum JusticeError {
     #[msg("Resolve timeout has not yet elapsed")]
     TimeoutNotReached,
 
+    #[msg("Resolve timeout has elapsed; dispute can only be settled via claim_timeout")]
+    ResolveTimeoutElapsed,
+
     #[msg("Cannot withdraw while funds are locked in active disputes")]
     BondLocked,
 

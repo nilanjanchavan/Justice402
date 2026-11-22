@@ -5,6 +5,10 @@ import BN from "bn.js";
 export const RECEIPT_VERSION = 1;
 export const RECEIPT_CANONICAL_LEN = 217;
 
+const U64_MAX = new BN("ffffffffffffffff", 16);
+const I64_MIN = new BN("-8000000000000000", 16);
+const I64_MAX = new BN("7fffffffffffffff", 16);
+
 export interface ReceiptData {
   version: number;
   provider: PublicKey;
@@ -12,12 +16,58 @@ export interface ReceiptData {
   requestHash: Buffer;     // 32 bytes
   responseHash: Buffer;    // 32 bytes
   paymentReference: Buffer;// 64 bytes
-  price: BN | bigint | number; // 8 bytes u64 LE
-  timestamp: BN | bigint | number; // 8 bytes i64 LE
-  nonce: BN | bigint | number; // 8 bytes u64 LE
+  price: BN | bigint | number | string; // 8 bytes u64 LE
+  timestamp: BN | bigint | number | string; // 8 bytes i64 LE
+  nonce: BN | bigint | number | string; // 8 bytes u64 LE
+}
+
+function toU64BN(val: BN | bigint | number | string, fieldName: string): BN {
+  if (typeof val === "number") {
+    if (!Number.isInteger(val) || !Number.isSafeInteger(val)) {
+      throw new Error(`${fieldName} must be a safe integer number`);
+    }
+  }
+  let bn: BN;
+  if (typeof val === "bigint") {
+    bn = new BN(val.toString());
+  } else if (BN.isBN(val)) {
+    bn = val;
+  } else {
+    bn = new BN(val.toString());
+  }
+
+  if (bn.isNeg() || bn.gt(U64_MAX)) {
+    throw new Error(`${fieldName} must be an unsigned 64-bit integer [0, 2^64 - 1]`);
+  }
+  return bn;
+}
+
+function toI64BN(val: BN | bigint | number | string, fieldName: string): BN {
+  if (typeof val === "number") {
+    if (!Number.isInteger(val) || !Number.isSafeInteger(val)) {
+      throw new Error(`${fieldName} must be a safe integer number`);
+    }
+  }
+  let bn: BN;
+  if (typeof val === "bigint") {
+    bn = new BN(val.toString());
+  } else if (BN.isBN(val)) {
+    bn = val;
+  } else {
+    bn = new BN(val.toString());
+  }
+
+  if (bn.lt(I64_MIN) || bn.gt(I64_MAX)) {
+    throw new Error(`${fieldName} must be a signed 64-bit integer [-2^63, 2^63 - 1]`);
+  }
+  return bn;
 }
 
 export function encodeReceipt(receipt: ReceiptData): Buffer {
+  if (receipt.version !== RECEIPT_VERSION) {
+    throw new Error(`Invalid receipt version: expected ${RECEIPT_VERSION}, got ${receipt.version}`);
+  }
+
   const buf = Buffer.alloc(RECEIPT_CANONICAL_LEN);
   let offset = 0;
 
@@ -53,17 +103,17 @@ export function encodeReceipt(receipt: ReceiptData): Buffer {
   offset += 64;
 
   // 7. Price (8 bytes u64 LE)
-  const priceBN = new BN(receipt.price.toString());
+  const priceBN = toU64BN(receipt.price, "price");
   priceBN.toArrayLike(Buffer, "le", 8).copy(buf, offset);
   offset += 8;
 
-  // 8. Timestamp (8 bytes i64 LE)
-  const tsBN = new BN(receipt.timestamp.toString());
-  tsBN.toArrayLike(Buffer, "le", 8).copy(buf, offset);
+  // 8. Timestamp (8 bytes i64 LE two's complement)
+  const tsBN = toI64BN(receipt.timestamp, "timestamp");
+  tsBN.toTwos(64).toArrayLike(Buffer, "le", 8).copy(buf, offset);
   offset += 8;
 
   // 9. Nonce (8 bytes u64 LE)
-  const nonceBN = new BN(receipt.nonce.toString());
+  const nonceBN = toU64BN(receipt.nonce, "nonce");
   nonceBN.toArrayLike(Buffer, "le", 8).copy(buf, offset);
   offset += 8;
 
@@ -101,7 +151,7 @@ export function decodeReceipt(buf: Buffer): ReceiptData {
   const price = new BN(buf.subarray(offset, offset + 8), "le");
   offset += 8;
 
-  const timestamp = new BN(buf.subarray(offset, offset + 8), "le");
+  const timestamp = new BN(buf.subarray(offset, offset + 8), "le").fromTwos(64);
   offset += 8;
 
   const nonce = new BN(buf.subarray(offset, offset + 8), "le");
@@ -123,4 +173,3 @@ export function decodeReceipt(buf: Buffer): ReceiptData {
 export function hashReceipt(receiptBytes: Buffer): Buffer {
   return createHash("sha256").update(receiptBytes).digest();
 }
-

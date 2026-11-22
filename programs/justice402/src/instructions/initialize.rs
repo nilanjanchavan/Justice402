@@ -33,6 +33,10 @@ pub struct Initialize<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+pub const MAX_DISPUTE_WINDOW: i64 = 365 * 24 * 3600; // 1 year
+pub const MAX_RESOLVE_TIMEOUT: i64 = 30 * 24 * 3600; // 30 days
+pub const MAX_WITHDRAW_DELAY: i64 = 365 * 24 * 3600;  // 1 year
+
 pub fn handle_initialize(
     ctx: Context<Initialize>,
     arbiter: Pubkey,
@@ -41,9 +45,9 @@ pub fn handle_initialize(
     withdraw_delay: i64,
     per_ruling_payout_cap: u64,
 ) -> Result<()> {
-    require!(dispute_window > 0, JusticeError::InvalidConfig);
-    require!(resolve_timeout > 0, JusticeError::InvalidConfig);
-    require!(withdraw_delay > 0, JusticeError::InvalidConfig);
+    require!(dispute_window > 0 && dispute_window <= MAX_DISPUTE_WINDOW, JusticeError::InvalidConfig);
+    require!(resolve_timeout > 0 && resolve_timeout <= MAX_RESOLVE_TIMEOUT, JusticeError::InvalidConfig);
+    require!(withdraw_delay > 0 && withdraw_delay <= MAX_WITHDRAW_DELAY, JusticeError::InvalidConfig);
     require!(per_ruling_payout_cap > 0, JusticeError::InvalidConfig);
 
     let config = &mut ctx.accounts.config;

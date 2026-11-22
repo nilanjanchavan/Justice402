@@ -53,6 +53,12 @@ pub fn handle_top_up(
     let provider = &mut ctx.accounts.provider;
     provider.bond = provider.bond.checked_add(amount).ok_or(JusticeError::MathOverflow)?;
 
+    // If a withdrawal was pending, reset the request timestamp so newly deposited funds
+    // must wait through a full withdraw_delay.
+    if provider.withdraw_requested_at > 0 {
+        provider.withdraw_requested_at = 0;
+    }
+
     emit!(BondToppedUp {
         provider: provider.wallet,
         amount,

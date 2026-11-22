@@ -73,17 +73,28 @@ describe("justice402 program test suite", () => {
   let vaultPda: PublicKey;
   let providerPda: PublicKey;
 
-  // Shared receipts to guarantee matching hashes between open and resolve
   let dispute101Receipt: ReceiptData;
   let dispute201Receipt: ReceiptData;
 
-  const DISPUTE_WINDOW = new BN(10); // 10 seconds
-  const RESOLVE_TIMEOUT = new BN(2); // 2 seconds
-  const WITHDRAW_DELAY = new BN(2);  // 2 seconds
+  const DISPUTE_WINDOW = new BN(15); // 15 seconds
+  const RESOLVE_TIMEOUT = new BN(3); // 3 seconds
+  const WITHDRAW_DELAY = new BN(3);  // 3 seconds
   const PAYOUT_CAP = new BN(50_000_000); // 50 USDC cap (6 decimals)
 
   const INITIAL_BOND = new BN(100_000_000); // 100 USDC
   const TOP_UP_BOND = new BN(50_000_000);   // 50 USDC
+
+  async function waitForTimestamp(targetTime: number): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < 15000) {
+      const slot = await provider.connection.getSlot();
+      const blockTime = await provider.connection.getBlockTime(slot);
+      if (blockTime !== null && blockTime >= targetTime) {
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
 
   before(async () => {
     admin = (provider.wallet as any).payer;
@@ -183,7 +194,7 @@ describe("justice402 program test suite", () => {
     expect(vaultAccount.amount.toString()).to.equal(INITIAL_BOND.toString());
   });
 
-  it("3. Tops up provider bond", async () => {
+  it("3. Tops up provider bond and resets pending withdrawal", async () => {
     await program.methods
       .topUp(TOP_UP_BOND)
       .accounts({
@@ -277,7 +288,6 @@ describe("justice402 program test suite", () => {
   });
 
   it("5. Rejects duplicate dispute opening with identical receipt", async () => {
-    // Re-use exact same receipt from test 4
     const canonicalBytes = encodeReceipt(dispute101Receipt);
     const receiptHash = hashReceipt(canonicalBytes);
     const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
@@ -315,13 +325,14 @@ describe("justice402 program test suite", () => {
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(openIx);
+    let capturedErr: any = null;
     try {
       await provider.sendAndConfirm(tx, [buyerWallet]);
-      expect.fail("Should have failed on duplicate dispute");
     } catch (err: any) {
-      const errMsg = getErrorMessage(err);
-      expect(errMsg).to.match(/already in use|custom program error|0x0|Simulation failed/);
+      capturedErr = err;
     }
+    expect(capturedErr, "Duplicate dispute must fail").to.not.be.null;
+    expect(getErrorMessage(capturedErr)).to.match(/already in use|custom program error|0x0|Simulation failed/);
   });
 
   it("6. Rejects Ed25519 verification with wrong message", async () => {
@@ -366,12 +377,14 @@ describe("justice402 program test suite", () => {
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(openIx);
+    let capturedErr: any = null;
     try {
       await provider.sendAndConfirm(tx, [buyerWallet]);
-      expect.fail("Should have failed with WrongMessage");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("WrongMessage");
+      capturedErr = err;
     }
+    expect(capturedErr, "WrongMessage must fail").to.not.be.null;
+    expect(getErrorMessage(capturedErr)).to.include("WrongMessage");
   });
 
   it("7. Rejects Ed25519 verification with wrong signer (attacker)", async () => {
@@ -414,12 +427,69 @@ describe("justice402 program test suite", () => {
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(openIx);
+    let capturedErr: any = null;
     try {
       await provider.sendAndConfirm(tx, [buyerWallet]);
-      expect.fail("Should have failed with WrongSigner");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("WrongSigner");
+      capturedErr = err;
     }
+    expect(capturedErr, "WrongSigner must fail").to.not.be.null;
+    expect(getErrorMessage(capturedErr)).to.include("WrongSigner");
+  });
+
+  it("7b. Rejects Ed25519 verification with corrupted signature bytes", async () => {
+    const receipt = createTestReceipt({ nonce: 1032 });
+    const canonicalBytes = encodeReceipt(receipt);
+    const receiptHash = hashReceipt(canonicalBytes);
+    const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
+
+    const validSig = signEd25519(canonicalBytes, providerWallet.secretKey);
+    const corruptedSig = Buffer.from(validSig);
+    corruptedSig[0] ^= 0xff; // Corrupt signature byte
+
+    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+      publicKey: providerWallet.publicKey.toBytes(),
+      message: canonicalBytes,
+      signature: corruptedSig,
+    });
+
+    const openIx = await program.methods
+      .openDispute(
+        {
+          version: receipt.version,
+          provider: receipt.provider,
+          buyer: receipt.buyer,
+          requestHash: Array.from(receipt.requestHash),
+          responseHash: Array.from(receipt.responseHash),
+          paymentReference: Array.from(receipt.paymentReference),
+          price: receipt.price as BN,
+          timestamp: receipt.timestamp as BN,
+          nonce: receipt.nonce as BN,
+        },
+        Array.from(Buffer.alloc(32, 1))
+      )
+      .accounts({
+        buyer: buyerWallet.publicKey,
+        provider: providerPda,
+        dispute: disputePda,
+        config: configPda,
+        instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    const tx = new Transaction().add(ed25519Ix).add(openIx);
+    let capturedErr: any = null;
+    try {
+      await provider.sendAndConfirm(tx, [buyerWallet]);
+    } catch (err: any) {
+      capturedErr = err;
+    }
+    expect(capturedErr, "Transaction should fail with corrupted signature").to.not.be.null;
+
+    // Verify dispute was NOT created
+    const disputeAccount = await program.account.dispute.fetchNullable(disputePda);
+    expect(disputeAccount).to.be.null;
   });
 
   it("8. Rejects open_dispute when Ed25519 instruction is missing", async () => {
@@ -453,14 +523,15 @@ describe("justice402 program test suite", () => {
       })
       .instruction();
 
-    // Transaction WITHOUT Ed25519 instruction
     const tx = new Transaction().add(openIx);
+    let capturedErr: any = null;
     try {
       await provider.sendAndConfirm(tx, [buyerWallet]);
-      expect.fail("Should have failed with MissingEd25519Instruction");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("MissingEd25519Instruction");
+      capturedErr = err;
     }
+    expect(capturedErr, "MissingEd25519Instruction must fail").to.not.be.null;
+    expect(getErrorMessage(capturedErr)).to.include("MissingEd25519Instruction");
   });
 
   it("9. Rejects tampered Ed25519 instruction offsets", async () => {
@@ -512,16 +583,18 @@ describe("justice402 program test suite", () => {
       .instruction();
 
     const tx = new Transaction().add(tamperedEd25519Ix).add(openIx);
+    let capturedErr: any = null;
     try {
       await provider.sendAndConfirm(tx, [buyerWallet]);
-      expect.fail("Should have failed with InvalidEd25519Offset");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("InvalidEd25519Offset");
+      capturedErr = err;
     }
+    expect(capturedErr, "InvalidEd25519Offset must fail").to.not.be.null;
+    expect(getErrorMessage(capturedErr)).to.include("InvalidEd25519Offset");
   });
 
   it("10. Rejects dispute opening after window expiry", async () => {
-    // Timestamp 100 seconds in the past (> DISPUTE_WINDOW of 10s)
+    // Timestamp 100 seconds in the past (> DISPUTE_WINDOW of 15s)
     const oldTimestamp = Math.floor(Date.now() / 1000) - 100;
     const receipt = createTestReceipt({ nonce: 106, timestamp: oldTimestamp });
     const canonicalBytes = encodeReceipt(receipt);
@@ -561,12 +634,65 @@ describe("justice402 program test suite", () => {
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(openIx);
+    let capturedErr: any = null;
     try {
       await provider.sendAndConfirm(tx, [buyerWallet]);
-      expect.fail("Should have failed with WindowExpired");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("WindowExpired");
+      capturedErr = err;
     }
+    expect(capturedErr, "WindowExpired must fail").to.not.be.null;
+    expect(getErrorMessage(capturedErr)).to.include("WindowExpired");
+  });
+
+  it("10b. Rejects dispute opening with future timestamp exceeding clock skew allowance", async () => {
+    // Timestamp 500 seconds in the future (> 60s max permitted skew)
+    const futureTimestamp = Math.floor(Date.now() / 1000) + 500;
+    const receipt = createTestReceipt({ nonce: 1062, timestamp: futureTimestamp });
+    const canonicalBytes = encodeReceipt(receipt);
+    const receiptHash = hashReceipt(canonicalBytes);
+    const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
+
+    const sig = signEd25519(canonicalBytes, providerWallet.secretKey);
+    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+      publicKey: providerWallet.publicKey.toBytes(),
+      message: canonicalBytes,
+      signature: sig,
+    });
+
+    const openIx = await program.methods
+      .openDispute(
+        {
+          version: receipt.version,
+          provider: receipt.provider,
+          buyer: receipt.buyer,
+          requestHash: Array.from(receipt.requestHash),
+          responseHash: Array.from(receipt.responseHash),
+          paymentReference: Array.from(receipt.paymentReference),
+          price: receipt.price as BN,
+          timestamp: receipt.timestamp as BN,
+          nonce: receipt.nonce as BN,
+        },
+        Array.from(Buffer.alloc(32, 1))
+      )
+      .accounts({
+        buyer: buyerWallet.publicKey,
+        provider: providerPda,
+        dispute: disputePda,
+        config: configPda,
+        instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    const tx = new Transaction().add(ed25519Ix).add(openIx);
+    let capturedErr: any = null;
+    try {
+      await provider.sendAndConfirm(tx, [buyerWallet]);
+    } catch (err: any) {
+      capturedErr = err;
+    }
+    expect(capturedErr, "Future timestamp must fail").to.not.be.null;
+    expect(getErrorMessage(capturedErr)).to.include("InvalidReceipt");
   });
 
   it("11. Rejects non-buyer caller opening dispute", async () => {
@@ -608,12 +734,14 @@ describe("justice402 program test suite", () => {
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(openIx);
+    let capturedErr: any = null;
     try {
       await provider.sendAndConfirm(tx, [attackerWallet]);
-      expect.fail("Should have failed with UnauthorizedBuyer");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("UnauthorizedBuyer");
+      capturedErr = err;
     }
+    expect(capturedErr, "UnauthorizedBuyer must fail").to.not.be.null;
+    expect(getErrorMessage(capturedErr)).to.include("UnauthorizedBuyer");
   });
 
   it("12. Enforces per_ruling_payout_cap when receipt price exceeds cap", async () => {
@@ -670,7 +798,6 @@ describe("justice402 program test suite", () => {
   });
 
   it("13. Arbiter resolves dispute: BuyerWins pays refund up to cap", async () => {
-    // Uses dispute201Receipt opened in test 12
     const receiptHash = hashReceipt(encodeReceipt(dispute201Receipt));
     const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
 
@@ -709,10 +836,10 @@ describe("justice402 program test suite", () => {
   });
 
   it("14. Rejects resolve_dispute by unauthorized non-arbiter", async () => {
-    // Dispute 101 from test 4 is still open
     const receiptHash = hashReceipt(encodeReceipt(dispute101Receipt));
     const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
 
+    let capturedErr: any = null;
     try {
       await program.methods
         .resolveDispute({ buyerWins: {} }, Array.from(Buffer.alloc(32, 9)))
@@ -727,10 +854,11 @@ describe("justice402 program test suite", () => {
         })
         .signers([attackerWallet])
         .rpc();
-      expect.fail("Should have failed with UnauthorizedArbiter");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("UnauthorizedArbiter");
+      capturedErr = err;
     }
+    expect(capturedErr, "UnauthorizedArbiter must fail").to.not.be.null;
+    expect(getErrorMessage(capturedErr)).to.include("UnauthorizedArbiter");
   });
 
   it("15. Rejects double resolve on an already resolved dispute", async () => {
@@ -738,6 +866,7 @@ describe("justice402 program test suite", () => {
     const receiptHash = hashReceipt(encodeReceipt(dispute201Receipt));
     const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
 
+    let capturedErr: any = null;
     try {
       await program.methods
         .resolveDispute({ buyerWins: {} }, Array.from(Buffer.alloc(32, 9)))
@@ -752,16 +881,53 @@ describe("justice402 program test suite", () => {
         })
         .signers([arbiter])
         .rpc();
-      expect.fail("Should have failed with DisputeNotOpen");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("DisputeNotOpen");
+      capturedErr = err;
     }
+    expect(capturedErr, "DisputeNotOpen must fail").to.not.be.null;
+    expect(getErrorMessage(capturedErr)).to.include("DisputeNotOpen");
   });
 
   it("16. Arbiter resolves ProviderWins: unlocks bond without buyer payout", async () => {
-    // Resolve dispute 101 from test 4
-    const receiptHash = hashReceipt(encodeReceipt(dispute101Receipt));
+    // Open dispute 108 for 20 USDC and immediately resolve ProviderWins before timeout
+    const receipt108 = createTestReceipt({ nonce: 108, price: new BN(20_000_000) });
+    const canonicalBytes = encodeReceipt(receipt108);
+    const receiptHash = hashReceipt(canonicalBytes);
     const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
+
+    const sig = signEd25519(canonicalBytes, providerWallet.secretKey);
+    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+      publicKey: providerWallet.publicKey.toBytes(),
+      message: canonicalBytes,
+      signature: sig,
+    });
+
+    const openIx = await program.methods
+      .openDispute(
+        {
+          version: receipt108.version,
+          provider: receipt108.provider,
+          buyer: receipt108.buyer,
+          requestHash: Array.from(receipt108.requestHash),
+          responseHash: Array.from(receipt108.responseHash),
+          paymentReference: Array.from(receipt108.paymentReference),
+          price: receipt108.price as BN,
+          timestamp: receipt108.timestamp as BN,
+          nonce: receipt108.nonce as BN,
+        },
+        Array.from(Buffer.alloc(32, 8))
+      )
+      .accounts({
+        buyer: buyerWallet.publicKey,
+        provider: providerPda,
+        dispute: disputePda,
+        config: configPda,
+        instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    await provider.sendAndConfirm(new Transaction().add(ed25519Ix).add(openIx), [buyerWallet]);
 
     const buyerTokenBefore = await getAccount(provider.connection, buyerTokenAccount);
     const providerAccountBefore: any = await program.account.provider.fetch(providerPda);
@@ -794,7 +960,7 @@ describe("justice402 program test suite", () => {
     expect(providerAccountAfter.locked.toString()).to.equal(expectedLocked.toString());
   });
 
-  it("17. Timeout refund: buyer claims refund if arbiter is silent past timeout", async () => {
+  it("17. Timeout refund: buyer claims refund if arbiter is silent past timeout, arbiter rejected after timeout", async () => {
     // Open dispute 301 for 15 USDC
     const receipt = createTestReceipt({ nonce: 301, price: new BN(15_000_000) });
     const canonicalBytes = encodeReceipt(receipt);
@@ -836,7 +1002,11 @@ describe("justice402 program test suite", () => {
     const tx = new Transaction().add(ed25519Ix).add(openIx);
     await provider.sendAndConfirm(tx, [buyerWallet]);
 
+    const disputeAccountBefore: any = await program.account.dispute.fetch(disputePda);
+    const deadline = Number(disputeAccountBefore.openedAt.toString()) + Number(RESOLVE_TIMEOUT.toString());
+
     // Calling claim_timeout immediately should fail with TimeoutNotReached
+    let earlyErr: any = null;
     try {
       await program.methods
         .claimTimeout()
@@ -851,13 +1021,36 @@ describe("justice402 program test suite", () => {
         })
         .signers([buyerWallet])
         .rpc();
-      expect.fail("Should have failed with TimeoutNotReached");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("TimeoutNotReached");
+      earlyErr = err;
     }
+    expect(earlyErr, "Should fail before timeout").to.not.be.null;
+    expect(getErrorMessage(earlyErr)).to.include("TimeoutNotReached");
 
-    // Wait for resolve_timeout (2s) to elapse
-    await new Promise((resolve) => setTimeout(resolve, 2500));
+    // Wait until chain time >= deadline
+    await waitForTimestamp(deadline);
+
+    // Arbiter trying to resolve after deadline should fail with ResolveTimeoutElapsed
+    let arbiterLateErr: any = null;
+    try {
+      await program.methods
+        .resolveDispute({ buyerWins: {} }, Array.from(Buffer.alloc(32, 9)))
+        .accounts({
+          arbiter: arbiter.publicKey,
+          config: configPda,
+          dispute: disputePda,
+          provider: providerPda,
+          vault: vaultPda,
+          buyerTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([arbiter])
+        .rpc();
+    } catch (err: any) {
+      arbiterLateErr = err;
+    }
+    expect(arbiterLateErr, "Arbiter should fail after timeout deadline").to.not.be.null;
+    expect(getErrorMessage(arbiterLateErr)).to.include("ResolveTimeoutElapsed");
 
     const buyerTokenBefore = await getAccount(provider.connection, buyerTokenAccount);
 
@@ -926,6 +1119,7 @@ describe("justice402 program test suite", () => {
     await provider.sendAndConfirm(new Transaction().add(ed25519Ix).add(openIx), [buyerWallet]);
 
     // Provider has locked funds: request_withdraw should fail
+    let reqErr: any = null;
     try {
       await program.methods
         .requestWithdraw()
@@ -935,12 +1129,14 @@ describe("justice402 program test suite", () => {
         })
         .signers([providerWallet])
         .rpc();
-      expect.fail("Should have failed with BondLocked");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("BondLocked");
+      reqErr = err;
     }
+    expect(reqErr, "requestWithdraw should fail when locked").to.not.be.null;
+    expect(getErrorMessage(reqErr)).to.include("BondLocked");
 
     // withdraw_bond should also fail
+    let withErr: any = null;
     try {
       await program.methods
         .withdrawBond(new BN(10_000_000))
@@ -954,12 +1150,13 @@ describe("justice402 program test suite", () => {
         })
         .signers([providerWallet])
         .rpc();
-      expect.fail("Should have failed with BondLocked");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("BondLocked");
+      withErr = err;
     }
+    expect(withErr, "withdrawBond should fail when locked").to.not.be.null;
+    expect(getErrorMessage(withErr)).to.include("BondLocked");
 
-    // Resolve dispute 401 so provider has 0 locked
+    // Resolve dispute 401
     await program.methods
       .resolveDispute({ providerWins: {} }, Array.from(Buffer.alloc(32, 4)))
       .accounts({
@@ -973,14 +1170,32 @@ describe("justice402 program test suite", () => {
       })
       .signers([arbiter])
       .rpc();
+
+    // Also resolve dispute 101 from test 4 to clear all remaining locks
+    const receipt101Hash = hashReceipt(encodeReceipt(dispute101Receipt));
+    const [dispute101Pda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receipt101Hash], program.programId);
+    await program.methods
+      .claimTimeout()
+      .accounts({
+        buyer: buyerWallet.publicKey,
+        config: configPda,
+        dispute: dispute101Pda,
+        provider: providerPda,
+        vault: vaultPda,
+        buyerTokenAccount,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([buyerWallet])
+      .rpc();
   });
 
   it("19. Withdraw restrictions: blocked before delay, succeeds after delay", async () => {
-    // At this point, all disputes (101, 201, 301, 401) are resolved, provider.locked == 0
+    // Verify provider.locked == 0
     const providerAccountBefore: any = await program.account.provider.fetch(providerPda);
     expect(providerAccountBefore.locked.toString()).to.equal("0");
 
     // Calling withdraw_bond before request_withdraw fails
+    let notReqErr: any = null;
     try {
       await program.methods
         .withdrawBond(new BN(10_000_000))
@@ -994,10 +1209,11 @@ describe("justice402 program test suite", () => {
         })
         .signers([providerWallet])
         .rpc();
-      expect.fail("Should have failed with WithdrawNotRequested");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("WithdrawNotRequested");
+      notReqErr = err;
     }
+    expect(notReqErr, "withdrawBond before request should fail").to.not.be.null;
+    expect(getErrorMessage(notReqErr)).to.include("WithdrawNotRequested");
 
     // Call request_withdraw
     await program.methods
@@ -1010,9 +1226,12 @@ describe("justice402 program test suite", () => {
       .rpc();
 
     const providerAccountRequested: any = await program.account.provider.fetch(providerPda);
-    expect(Number(providerAccountRequested.withdrawRequestedAt.toString())).to.be.greaterThan(0);
+    const requestedAt = Number(providerAccountRequested.withdrawRequestedAt.toString());
+    expect(requestedAt).to.be.greaterThan(0);
+    const unlockDeadline = requestedAt + Number(WITHDRAW_DELAY.toString());
 
     // Immediate withdraw_bond should fail with WithdrawDelayNotElapsed
+    let delayErr: any = null;
     try {
       await program.methods
         .withdrawBond(new BN(10_000_000))
@@ -1026,18 +1245,19 @@ describe("justice402 program test suite", () => {
         })
         .signers([providerWallet])
         .rpc();
-      expect.fail("Should have failed with WithdrawDelayNotElapsed");
     } catch (err: any) {
-      expect(getErrorMessage(err)).to.include("WithdrawDelayNotElapsed");
+      delayErr = err;
     }
+    expect(delayErr, "withdrawBond before delay elapses should fail").to.not.be.null;
+    expect(getErrorMessage(delayErr)).to.include("WithdrawDelayNotElapsed");
 
-    // Wait for withdraw_delay (2s) to elapse
-    await new Promise((resolve) => setTimeout(resolve, 2500));
+    // Wait until chain time >= unlockDeadline
+    await waitForTimestamp(unlockDeadline);
 
     const providerTokenBefore = await getAccount(provider.connection, providerTokenAccount);
 
     // Call withdraw_bond after delay elapses
-    const withdrawAmount = new BN(20_000_000); // 20 USDC
+    const withdrawAmount = new BN(10_000_000); // 10 USDC
     await program.methods
       .withdrawBond(withdrawAmount)
       .accounts({

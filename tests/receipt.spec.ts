@@ -59,5 +59,38 @@ describe("Receipt Canonical Encoding & Vector Tests", () => {
     const invalidLong = Buffer.alloc(250);
     expect(() => decodeReceipt(invalidLong)).to.throw(/Invalid buffer length/);
   });
+
+  it("validates numerical bounds and two's complement signed timestamp", () => {
+    const baseReceipt: ReceiptData = {
+      version: 1,
+      provider: PublicKey.default,
+      buyer: PublicKey.default,
+      requestHash: Buffer.alloc(32, 1),
+      responseHash: Buffer.alloc(32, 2),
+      paymentReference: Buffer.alloc(64, 3),
+      price: 1000,
+      timestamp: -500, // Negative timestamp
+      nonce: 42,
+    };
+
+    // Negative timestamp encoded in two's complement roundtrips correctly
+    const encoded = encodeReceipt(baseReceipt);
+    const decoded = decodeReceipt(encoded);
+    expect(decoded.timestamp.toString()).to.equal("-500");
+
+    // Negative price should throw
+    expect(() => encodeReceipt({ ...baseReceipt, price: -10 })).to.throw(/unsigned 64-bit/);
+
+    // Negative nonce should throw
+    expect(() => encodeReceipt({ ...baseReceipt, nonce: -1 })).to.throw(/unsigned 64-bit/);
+
+    // Unsafe floating point number should throw
+    expect(() => encodeReceipt({ ...baseReceipt, price: 12.34 })).to.throw(/safe integer/);
+    expect(() => encodeReceipt({ ...baseReceipt, timestamp: NaN })).to.throw(/safe integer/);
+
+    // Out of bounds u64 should throw
+    const tooBigU64 = new BN("10000000000000000", 16); // 2^64
+    expect(() => encodeReceipt({ ...baseReceipt, price: tooBigU64 })).to.throw(/unsigned 64-bit/);
+  });
 });
 

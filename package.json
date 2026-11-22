@@ -7,7 +7,8 @@
     "services/*"
   ],
   "scripts": {
-    "test": "npx mocha -r ts-node/register -t 60000 tests/receipt.spec.ts tests/justice402.ts"
+    "test": "npx mocha -r ts-node/register -t 60000 tests/receipt.spec.ts",
+    "test:integration": "npx mocha -r ts-node/register -t 60000 tests/justice402.ts"
   },
   "devDependencies": {
     "@anchor-lang/core": "^1.2.2",
