@@ -1,0 +1,25 @@
+name: x402-demo
+subdomain: x402-demo
+title: "x402 Demo"
+description: "Minimal x402 V2 sandbox endpoint."
+category: devtools
+version: v1
+routing:
+  type: respond
+operator:
+  currencies:
+    usd: ["USDC"]
+  network: "localnet"
+  fee_payer: true
+endpoints:
+  - method: GET
+    path: "report"
+    description: "Return a sandbox report."
+    metering:
+      schemes: [x402-exact]
+      dimensions:
+        - direction: usage
+          unit: requests
+          scale: 1
+      tiers:
+        - price_usd: 0.001
