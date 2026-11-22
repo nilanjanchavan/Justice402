@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+
+reviews:
+  profile: "assertive"
+  commit_status: true
+  auto_title_placeholder: "@coderabbitai"
+  path_instructions:
+    - path: "programs/justice402/**"
+      instructions: |
+        - This is a Solana Anchor 1.0 program on devnet for x402 payment accountability.
+        - Security requirements:
+          1. Arithmetic: All arithmetic MUST use checked operations (checked_add, checked_sub, etc.). Flag any unchecked math.
+          2. Ed25519 Sysvar Introspection: In open_dispute, ensure provider signature verification over canonical receipt bytes properly validates that sig_ix_idx, pubkey_ix_idx, and msg_ix_idx are all u16::MAX (offsets point strictly within the Ed25519 instruction's own data to prevent cross-instruction exploits).
+          3. Account Validation: Ensure all signers, PDAs, and token accounts are strictly validated.
+          4. No Mainnet or Secrets: Flag any mainnet addresses, real funds, or hardcoded secrets.
+    - path: "packages/anchor-client/**"
+      instructions: |
+        - Verify canonical receipt encoding adheres to docs/RECEIPT.md (217 bytes fixed length, little-endian numbers).
+        - Verify web3.js v1 and @anchor-lang/core are used (do not allow @coral-xyz/anchor or web3.js v2 mixed into this package).
+    - path: "tests/**"
+      instructions: |
+        - Verify comprehensive coverage of edge cases: invalid Ed25519 signatures, wrong signers, wrong messages, duplicate disputes, window expiries, payout caps, and timeout refunds.
