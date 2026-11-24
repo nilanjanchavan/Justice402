@@ -1,6 +1,9 @@
-# Justice402: Live Devnet Demo Execution Proof
+# Justice402: Sample Devnet Demo Execution Trace
 
-This document provides a verifiable execution log of the Justice402 protocol running against **Solana Devnet**. Technical reviewers can verify each on-chain transaction directly on Solana Explorer without running a local validator or signing transactions.
+> [!NOTE]
+> **SAMPLE DATA**: The transaction signatures, account addresses, and explorer links in this document represent sample execution trace data for schema and protocol verification. A live on-chain devnet broadcast run will be generated upon live cluster deployment and wallet funding.
+
+This document provides a sample execution log of the Justice402 protocol running against **Solana Devnet**. Users can inspect the end-to-end flow structure without running a local validator.
 
 - **Cluster**: `Solana Devnet`
 - **Program ID**: [`2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ`](https://explorer.solana.com/address/2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ?cluster=devnet)
@@ -55,7 +58,7 @@ This document provides a verifiable execution log of the Justice402 protocol run
   ```
 - **Off-Chain Audit**: Buyer detects `temperature: 9999` exceeds allowed maximum of `60°C`.
 - **On-Chain Transaction**: `open_dispute` accompanied by `Ed25519SigVerify` instruction sysvar introspection.
-- **Transaction Signature**: [`4qu7KSYr9ZzGhmZnUBj96SMe2sUGVdSWeZsPCp8okZuT8gotfL3vYH1qXKodRVhuwzgbCk5As7aDAzfDK6N4dh6N`](https://explorer.solana.com/tx/4qu7KSYr9ZzGhmZnUBj96SMe2sUGVdSWeZsPCp8okZuT8gotfL3vYH1qXKodRVhuwzgbCk5As7aDAzfDK6N4dh6N?cluster=devnet)
+- **Transaction Signature**: [`4qu7KSYr9ZzGhmZnUBj96SMe2sUGVdSWeZsPCp8okZuT8gotfL3vYH1qXKodRVhuwzgbCk5As7aDAzfDK6N4dh6N`](https://explorer.solana.com/tx/4qu7KSYr9ZzGhmZnUBj96SMe2sUGVdSWeZsPCp8okZuT8gotfL3vYH1qXKodRVhuwzgbCk5As7aDAzfDK6N4dh6N?cluster=devnet) *(SAMPLE DATA)*
 - **State Changes**:
   - 5 USDC claim locked from provider bond (`provider.locked = 5,000,000`).
   - 1 USDC buyer deposit transferred into program vault.
@@ -69,7 +72,7 @@ This document provides a verifiable execution log of the Justice402 protocol run
 - **Action**: Dedicated arbiter wallet runs `npm run arbiter -- --dispute 8vKYbW2QoAueFkPnYqSj59ZxC3VLW3DU4K7DBExjf98M`.
 - **Off-Chain Verification**: Arbiter CLI asserts `sha256(provider.spec) == spec_hash`, executes JSON schema validator, confirms range breach.
 - **On-Chain Transaction**: `resolve_dispute` with `Ruling::BuyerWins`.
-- **Transaction Signature**: [`3wVZMr2gDT4goWYsvL2pzzdzDXE2eBmuDbns7KsvwvMdFFQ5Hh1MVYLrK6VLBdbxBzXGVXKffL57rK6E6FhqoY7c`](https://explorer.solana.com/tx/3wVZMr2gDT4goWYsvL2pzzdzDXE2eBmuDbns7KsvwvMdFFQ5Hh1MVYLrK6VLBdbxBzXGVXKffL57rK6E6FhqoY7c?cluster=devnet)
+- **Transaction Signature**: [`3wVZMr2gDT4goWYsvL2pzzdzDXE2eBmuDbns7KsvwvMdFFQ5Hh1MVYLrK6VLBdbxBzXGVXKffL57rK6E6FhqoY7c`](https://explorer.solana.com/tx/3wVZMr2gDT4goWYsvL2pzzdzDXE2eBmuDbns7KsvwvMdFFQ5Hh1MVYLrK6VLBdbxBzXGVXKffL57rK6E6FhqoY7c?cluster=devnet) *(SAMPLE DATA)*
 
 ---
 

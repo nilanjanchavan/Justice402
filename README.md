@@ -8,9 +8,9 @@
 
 - **Live Dashboard**: [https://justice402-dashboard.vercel.app](https://justice402-dashboard.vercel.app) *(Placeholder)*
 - **Hosted Provider API**: [https://api.justice402.dev](https://api.justice402.dev) *(Placeholder)*
-- **Solana Devnet Program**: [`2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ`](https://explorer.solana.com/address/2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ?cluster=devnet)
+- **Solana Devnet Program**: [`2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ`](https://explorer.solana.com/address/2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ?cluster=devnet) *(Program ID generated; deployment pending devnet SOL funding)*
 - **GitHub Repository**: [https://github.com/nilanjanchavan/Justice402](https://github.com/nilanjanchavan/Justice402)
-- **Live Demo Run Proof**: [`docs/DEMO_RUN.md`](docs/DEMO_RUN.md) & [`docs/demo-run.json`](docs/demo-run.json)
+- **Sample Demo Run Trace**: [`docs/DEMO_RUN.sample.md`](docs/DEMO_RUN.sample.md) & [`docs/demo-run.sample.json`](docs/demo-run.sample.json) *(Live devnet broadcast run pending wallet funding)*
 
 ---
 
@@ -64,7 +64,7 @@ sequenceDiagram
 4. **Ed25519 Instruction Introspection**:
    The Solana program introspects the transaction's instruction sysvar to verify the provider's signature on-chain with zero third-party trust.
 5. **Human Arbiter First**:
-   Deterministic verification CLI displays full audits and prompts the human judge. An AI arbiter advisor is future work.
+   Deterministic verification CLI displays full audits and prompts the human arbiter. An AI arbiter advisor is future work.
 6. **Anti-Griefing Protection**:
    Buyers post a `dispute_deposit` (1 USDC) returned on win/timeout, forfeited on provider win. Open disputes are capped at 3 per buyer.
 7. **Permissionless Timeout**:
@@ -95,10 +95,10 @@ sequenceDiagram
 
 - [**docs/DESIGN_DECISIONS.md**](docs/DESIGN_DECISIONS.md) — Comprehensive design choices, trade-offs, and alternatives considered.
 - [**docs/CODE_WALKTHROUGH.md**](docs/CODE_WALKTHROUGH.md) — Line-by-line audit of every instruction, account constraint, and test mapping.
-- [**docs/DEPLOY.md**](docs/DEPLOY.md) — Exact devnet deployment guide with verifiable Docker builds and `solana-verify`.
-- [**docs/DEMO_SCRIPT.md**](docs/DEMO_SCRIPT.md) — 2 to 3 minute live demo presentation talk track.
-- [**docs/QA.md**](docs/QA.md) — 20 questions and answers covering security, attack vectors, and future mainnet architecture.
+- [**docs/DEPLOY.md**](docs/DEPLOY.md) — Devnet deployment guide with verifiable Docker builds and `solana-verify`.
 - [**docs/HOSTING.md**](docs/HOSTING.md) — Hosted Provider API production deployment and environment variables.
+- [**docs/RECEIPT.md**](docs/RECEIPT.md) — Receipt format, field layout, and shared test vectors.
+- [**docs/DEMO_RUN.sample.md**](docs/DEMO_RUN.sample.md) — Sample devnet demo execution trace.
 
 ---
 

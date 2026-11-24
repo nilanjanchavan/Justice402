@@ -1,0 +1,1630 @@
+{
+  "address": "2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ",
+  "metadata": {
+    "name": "justice402",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Justice402 accountability layer for x402"
+  },
+  "instructions": [
+    {
+      "name": "claim_timeout",
+      "discriminator": [
+        130,
+        234,
+        45,
+        53,
+        120,
+        90,
+        86,
+        178
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Permissionless caller: anyone (buyer, keeper, provider) can trigger timeout refund after deadline"
+          ],
+          "signer": true
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "dispute",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dispute.receipt_hash",
+                "account": "Dispute"
+              }
+            ]
+          }
+        },
+        {
+          "name": "provider",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  118,
+                  105,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider.wallet",
+                "account": "Provider"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  117,
+                  121,
+                  101,
+                  114,
+                  95,
+                  114,
+                  101,
+                  99,
+                  111,
+                  114,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider.wallet",
+                "account": "Provider"
+              },
+              {
+                "kind": "account",
+                "path": "dispute.buyer",
+                "account": "Dispute"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer_token_account",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initialize",
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "arbiter",
+          "type": "pubkey"
+        },
+        {
+          "name": "dispute_window",
+          "type": "i64"
+        },
+        {
+          "name": "resolve_timeout",
+          "type": "i64"
+        },
+        {
+          "name": "withdraw_delay",
+          "type": "i64"
+        },
+        {
+          "name": "per_ruling_payout_cap",
+          "type": "u64"
+        },
+        {
+          "name": "dispute_deposit",
+          "type": "u64"
+        },
+        {
+          "name": "max_open_disputes_per_buyer",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "open_dispute",
+      "discriminator": [
+        137,
+        25,
+        99,
+        119,
+        23,
+        223,
+        161,
+        42
+      ],
+      "accounts": [
+        {
+          "name": "buyer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "provider",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  118,
+                  105,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider.wallet",
+                "account": "Provider"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  117,
+                  121,
+                  101,
+                  114,
+                  95,
+                  114,
+                  101,
+                  99,
+                  111,
+                  114,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider.wallet",
+                "account": "Provider"
+              },
+              {
+                "kind": "account",
+                "path": "buyer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dispute",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "receipt"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer_token_account",
+          "writable": true
+        },
+        {
+          "name": "instructions_sysvar",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "receipt",
+          "type": {
+            "defined": {
+              "name": "Receipt"
+            }
+          }
+        },
+        {
+          "name": "evidence_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "register_provider",
+      "discriminator": [
+        254,
+        209,
+        54,
+        184,
+        46,
+        197,
+        109,
+        78
+      ],
+      "accounts": [
+        {
+          "name": "provider_wallet",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "provider",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  118,
+                  105,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider_wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "provider_token_account",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "bond_amount",
+          "type": "u64"
+        },
+        {
+          "name": "spec_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "request_withdraw",
+      "discriminator": [
+        137,
+        95,
+        187,
+        96,
+        250,
+        138,
+        31,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "provider_wallet",
+          "signer": true
+        },
+        {
+          "name": "provider",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  118,
+                  105,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider_wallet"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "resolve_dispute",
+      "discriminator": [
+        231,
+        6,
+        202,
+        6,
+        96,
+        103,
+        12,
+        230
+      ],
+      "accounts": [
+        {
+          "name": "arbiter",
+          "signer": true
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "dispute",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dispute.receipt_hash",
+                "account": "Dispute"
+              }
+            ]
+          }
+        },
+        {
+          "name": "provider",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  118,
+                  105,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider.wallet",
+                "account": "Provider"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  117,
+                  121,
+                  101,
+                  114,
+                  95,
+                  114,
+                  101,
+                  99,
+                  111,
+                  114,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider.wallet",
+                "account": "Provider"
+              },
+              {
+                "kind": "account",
+                "path": "dispute.buyer",
+                "account": "Dispute"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer_token_account",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "ruling",
+          "type": {
+            "defined": {
+              "name": "Ruling"
+            }
+          }
+        },
+        {
+          "name": "ruling_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "top_up",
+      "discriminator": [
+        236,
+        225,
+        96,
+        9,
+        60,
+        106,
+        77,
+        208
+      ],
+      "accounts": [
+        {
+          "name": "provider_wallet",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "provider",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  118,
+                  105,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider_wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "provider_token_account",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "withdraw_bond",
+      "discriminator": [
+        222,
+        199,
+        141,
+        31,
+        188,
+        93,
+        155,
+        40
+      ],
+      "accounts": [
+        {
+          "name": "provider_wallet",
+          "signer": true
+        },
+        {
+          "name": "provider",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  118,
+                  105,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider_wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "provider_token_account",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "BuyerRecord",
+      "discriminator": [
+        107,
+        122,
+        54,
+        31,
+        4,
+        54,
+        209,
+        38
+      ]
+    },
+    {
+      "name": "Config",
+      "discriminator": [
+        155,
+        12,
+        170,
+        224,
+        30,
+        250,
+        204,
+        130
+      ]
+    },
+    {
+      "name": "Dispute",
+      "discriminator": [
+        36,
+        49,
+        241,
+        67,
+        40,
+        36,
+        241,
+        74
+      ]
+    },
+    {
+      "name": "Provider",
+      "discriminator": [
+        164,
+        180,
+        71,
+        17,
+        75,
+        216,
+        80,
+        195
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "BondToppedUp",
+      "discriminator": [
+        182,
+        139,
+        47,
+        228,
+        13,
+        187,
+        220,
+        146
+      ]
+    },
+    {
+      "name": "BondWithdrawn",
+      "discriminator": [
+        111,
+        192,
+        154,
+        231,
+        58,
+        115,
+        130,
+        103
+      ]
+    },
+    {
+      "name": "DisputeOpened",
+      "discriminator": [
+        239,
+        222,
+        102,
+        235,
+        193,
+        85,
+        1,
+        214
+      ]
+    },
+    {
+      "name": "DisputeResolved",
+      "discriminator": [
+        121,
+        64,
+        249,
+        153,
+        139,
+        128,
+        236,
+        187
+      ]
+    },
+    {
+      "name": "ProviderRegistered",
+      "discriminator": [
+        38,
+        209,
+        137,
+        78,
+        185,
+        19,
+        147,
+        14
+      ]
+    },
+    {
+      "name": "WithdrawRequested",
+      "discriminator": [
+        114,
+        16,
+        240,
+        206,
+        93,
+        128,
+        151,
+        39
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "MathOverflow",
+      "msg": "Calculation overflowed"
+    },
+    {
+      "code": 6001,
+      "name": "InvalidConfig",
+      "msg": "Invalid configuration parameter"
+    },
+    {
+      "code": 6002,
+      "name": "WindowExpired",
+      "msg": "Dispute window has expired"
+    },
+    {
+      "code": 6003,
+      "name": "UnauthorizedBuyer",
+      "msg": "Only the buyer named in the receipt can open a dispute"
+    },
+    {
+      "code": 6004,
+      "name": "WrongSigner",
+      "msg": "Receipt signer does not match provider wallet"
+    },
+    {
+      "code": 6005,
+      "name": "WrongMessage",
+      "msg": "Ed25519 signature verified message does not match canonical receipt"
+    },
+    {
+      "code": 6006,
+      "name": "MissingEd25519Instruction",
+      "msg": "Missing required Ed25519 signature verification instruction in transaction"
+    },
+    {
+      "code": 6007,
+      "name": "InvalidEd25519Data",
+      "msg": "Invalid Ed25519 instruction data layout or length"
+    },
+    {
+      "code": 6008,
+      "name": "InvalidEd25519Offset",
+      "msg": "Ed25519 instruction offset points outside instruction data"
+    },
+    {
+      "code": 6009,
+      "name": "InvalidReceipt",
+      "msg": "Receipt length or version invalid"
+    },
+    {
+      "code": 6010,
+      "name": "InsufficientBond",
+      "msg": "Insufficient bond available to open dispute"
+    },
+    {
+      "code": 6011,
+      "name": "UnauthorizedArbiter",
+      "msg": "Caller is not the configured arbiter"
+    },
+    {
+      "code": 6012,
+      "name": "DisputeAlreadyResolved",
+      "msg": "Dispute is already resolved"
+    },
+    {
+      "code": 6013,
+      "name": "DisputeNotOpen",
+      "msg": "Dispute is not in Open status"
+    },
+    {
+      "code": 6014,
+      "name": "TimeoutNotReached",
+      "msg": "Resolve timeout has not yet elapsed"
+    },
+    {
+      "code": 6015,
+      "name": "ResolveTimeoutElapsed",
+      "msg": "Resolve timeout has elapsed; dispute can only be settled via claim_timeout"
+    },
+    {
+      "code": 6016,
+      "name": "BondLocked",
+      "msg": "Cannot withdraw while funds are locked in active disputes"
+    },
+    {
+      "code": 6017,
+      "name": "ActiveDisputesPending",
+      "msg": "Cannot withdraw while disputes are open"
+    },
+    {
+      "code": 6018,
+      "name": "SpecHashMismatch",
+      "msg": "Receipt spec hash does not match provider registered spec hash"
+    },
+    {
+      "code": 6019,
+      "name": "WithdrawDelayNotElapsed",
+      "msg": "Withdraw delay has not elapsed since request"
+    },
+    {
+      "code": 6020,
+      "name": "WithdrawNotRequested",
+      "msg": "Withdrawal has not been requested"
+    },
+    {
+      "code": 6021,
+      "name": "InsufficientWithdrawBalance",
+      "msg": "Requested amount exceeds available unreserved bond"
+    },
+    {
+      "code": 6022,
+      "name": "TooManyOpenDisputes",
+      "msg": "Maximum open disputes per buyer exceeded for this provider"
+    }
+  ],
+  "types": [
+    {
+      "name": "BondToppedUp",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "total_bond",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BondWithdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "remaining_bond",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BuyerRecord",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "open_disputes",
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Config",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "arbiter",
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "dispute_window",
+            "type": "i64"
+          },
+          {
+            "name": "resolve_timeout",
+            "type": "i64"
+          },
+          {
+            "name": "withdraw_delay",
+            "type": "i64"
+          },
+          {
+            "name": "per_ruling_payout_cap",
+            "type": "u64"
+          },
+          {
+            "name": "dispute_deposit",
+            "type": "u64"
+          },
+          {
+            "name": "max_open_disputes_per_buyer",
+            "type": "u32"
+          },
+          {
+            "name": "vault_bump",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Dispute",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "receipt_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "spec_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "claim_amount",
+            "type": "u64"
+          },
+          {
+            "name": "deposit_amount",
+            "type": "u64"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "DisputeStatus"
+              }
+            }
+          },
+          {
+            "name": "opened_at",
+            "type": "i64"
+          },
+          {
+            "name": "evidence_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "ruling_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DisputeOpened",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "receipt_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "spec_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "claim_amount",
+            "type": "u64"
+          },
+          {
+            "name": "deposit_amount",
+            "type": "u64"
+          },
+          {
+            "name": "opened_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DisputeResolved",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "receipt_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "DisputeStatus"
+              }
+            }
+          },
+          {
+            "name": "ruling_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "payout",
+            "type": "u64"
+          },
+          {
+            "name": "resolved_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DisputeStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Open"
+          },
+          {
+            "name": "BuyerWins"
+          },
+          {
+            "name": "ProviderWins"
+          },
+          {
+            "name": "TimedOut"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Provider",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "bond",
+            "type": "u64"
+          },
+          {
+            "name": "locked",
+            "type": "u64"
+          },
+          {
+            "name": "withdraw_requested_at",
+            "type": "i64"
+          },
+          {
+            "name": "spec_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "open_disputes",
+            "type": "u64"
+          },
+          {
+            "name": "disputes_buyer_won",
+            "type": "u64"
+          },
+          {
+            "name": "disputes_provider_won",
+            "type": "u64"
+          },
+          {
+            "name": "disputes_timed_out",
+            "type": "u64"
+          },
+          {
+            "name": "total_slashed",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProviderRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "bond",
+            "type": "u64"
+          },
+          {
+            "name": "spec_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "registered_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Receipt",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "spec_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "request_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "response_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "payment_reference",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Ruling",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "BuyerWins"
+          },
+          {
+            "name": "ProviderWins"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WithdrawRequested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "requested_at",
+            "type": "i64"
+          }
+        ]
+      }
+    }
+  ]
+}

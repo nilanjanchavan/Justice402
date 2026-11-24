@@ -16,13 +16,17 @@ interface StepRecord {
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<"timeline" | "providers" | "disputes" | "architecture">("timeline");
   const [demoData, setDemoData] = useState<any>(fallbackRunData);
+  const [isUsingFallback, setIsUsingFallback] = useState<boolean>(true);
 
   useEffect(() => {
     // Attempt to load latest demo-run.json if served
     fetch("/demo-run.json")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (data && data.steps) setDemoData(data);
+        if (data && data.steps) {
+          setDemoData(data);
+          setIsUsingFallback(false);
+        }
       })
       .catch(() => {});
   }, []);
@@ -114,10 +118,16 @@ export default function DashboardPage() {
       {activeTab === "timeline" && (
         <section className="space-y-6">
           <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl p-5 mb-6">
-            <h2 className="text-lg font-bold text-white mb-1">Devnet Execution Timeline</h2>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 mb-2">
+              <h2 className="text-lg font-bold text-white">Devnet Execution Timeline</h2>
+              {isUsingFallback && (
+                <span className="text-xs font-mono font-bold uppercase bg-amber-500/10 text-amber-400 border border-amber-500/30 px-2.5 py-1 rounded">
+                  Sample Data (Pending Devnet Run)
+                </span>
+              )}
+            </div>
             <p className="text-xs sm:text-sm text-slate-400">
-              Listing real on-chain transaction signatures, Ed25519 introspection proofs, and settlement results.
-              Click any transaction to verify on Solana Explorer.
+              Sample execution trace illustrating on-chain transaction signatures, Ed25519 introspection proofs, and settlement results.
             </p>
           </div>
 
@@ -151,7 +161,7 @@ export default function DashboardPage() {
                   )}
 
                   {s.txSignature && (
-                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-800/60">
+                    <div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-slate-800/60">
                       <span className="text-xs text-slate-500 font-mono">Devnet Tx:</span>
                       <a
                         href={s.explorerUrl || `https://explorer.solana.com/tx/${s.txSignature}?cluster=devnet`}
@@ -161,6 +171,11 @@ export default function DashboardPage() {
                       >
                         {s.txSignature} ↗
                       </a>
+                      {isUsingFallback && (
+                        <span className="text-[10px] font-mono text-amber-400/80 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                          SAMPLE DATA
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>

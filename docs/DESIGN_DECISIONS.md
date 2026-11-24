@@ -69,7 +69,7 @@ This document details every major architectural and protocol design decision mad
 ## 8. Human Arbiter First (AI Advisor as Future Work)
 
 - **Chosen Design**: The initial version relies strictly on a **Human Arbiter CLI** with deterministic auditing tools.
-- **Rationale**: Fully autonomous AI arbiters introduce non-deterministic prompt injection risks and LLM hallucination vulnerabilities when real funds are at stake. By designing the deterministic verifier first (verifying hashes, schema validation, numerical ranges, and freshness), the human arbiter makes the final cryptographic signature. An AI arbiter is cleanly architected as an advisor that suggests rulings to the human judge.
+- **Rationale**: Fully autonomous AI arbiters introduce non-deterministic prompt injection risks and LLM hallucination vulnerabilities when real funds are at stake. By designing the deterministic verifier first (verifying hashes, schema validation, numerical ranges, and freshness), the human arbiter makes the final cryptographic signature. An AI arbiter is cleanly architected as an advisor that suggests rulings to the human arbiter.
 
 ---
 
