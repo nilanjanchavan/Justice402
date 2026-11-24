@@ -23,6 +23,8 @@ pub mod justice402 {
         resolve_timeout: i64,
         withdraw_delay: i64,
         per_ruling_payout_cap: u64,
+        dispute_deposit: u64,
+        max_open_disputes_per_buyer: u32,
     ) -> Result<()> {
         handle_initialize(
             ctx,
@@ -31,14 +33,17 @@ pub mod justice402 {
             resolve_timeout,
             withdraw_delay,
             per_ruling_payout_cap,
+            dispute_deposit,
+            max_open_disputes_per_buyer,
         )
     }
 
     pub fn register_provider(
         ctx: Context<RegisterProvider>,
         bond_amount: u64,
+        spec_hash: [u8; 32],
     ) -> Result<()> {
-        handle_register_provider(ctx, bond_amount)
+        handle_register_provider(ctx, bond_amount, spec_hash)
     }
 
     pub fn top_up(
@@ -79,4 +84,3 @@ pub mod justice402 {
         handle_withdraw_bond(ctx, amount)
     }
 }
-

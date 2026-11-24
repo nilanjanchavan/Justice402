@@ -1,0 +1,76 @@
+{
+  "executedAt": "2026-11-24T13:40:00.000Z",
+  "network": "Solana Devnet",
+  "programId": "2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ",
+  "buyer": "FsCLHjhVcrkuhw3K4KUrLNY6T3fuwTu415AnkdGkcJZH",
+  "steps": [
+    {
+      "step": 1,
+      "title": "Pre-Flight Trust Verification",
+      "status": "SUCCESS",
+      "description": "Buyer read provider on-chain bond, track record, and spec_hash from Solana Devnet before spending.",
+      "details": {
+        "provider": "7xEEM6fkvmS4p3B8Erxw6o1ynuCQLbXBGDaZiAtGveAv",
+        "bond": "100000000",
+        "specHash": "098199b45785055b4bca45873a1112423c8a9f4c39f09e25d61486bc9e81b67f"
+      }
+    },
+    {
+      "step": 2,
+      "title": "Honest Service Purchase (Real x402 Payment)",
+      "status": "SUCCESS",
+      "description": "Executed real x402 V2 payment request against devnet provider; verified provider-signed receipt.",
+      "details": {
+        "url": "https://api.justice402.dev/weather",
+        "pricePaid": "5.0 USDC",
+        "data": {
+          "city": "SolanaBeach",
+          "temperature": 24.5,
+          "humidity": 55,
+          "observedAt": 1795523999
+        }
+      }
+    },
+    {
+      "step": 3,
+      "title": "Lying Service Detected & On-Chain Dispute Opened",
+      "status": "SUCCESS",
+      "description": "Detected numerical range violation (temperature 9999°C > 60°C); submitted Ed25519 introspection and opened on-chain dispute.",
+      "txSignature": "4qu7KSYr9ZzGhmZnUBj96SMe2sUGVdSWeZsPCp8okZuT8gotfL3vYH1qXKodRVhuwzgbCk5As7aDAzfDK6N4dh6N",
+      "explorerUrl": "https://explorer.solana.com/tx/4qu7KSYr9ZzGhmZnUBj96SMe2sUGVdSWeZsPCp8okZuT8gotfL3vYH1qXKodRVhuwzgbCk5As7aDAzfDK6N4dh6N?cluster=devnet",
+      "details": {
+        "disputePda": "8vKYbW2QoAueFkPnYqSj59ZxC3VLW3DU4K7DBExjf98M",
+        "claimAmount": "5000000",
+        "depositAmount": "1000000",
+        "violations": [
+          "Field 'temperature' value 9999 exceeds maximum allowed 60",
+          "Field 'humidity' value -50 below minimum allowed 0"
+        ]
+      }
+    },
+    {
+      "step": 4,
+      "title": "Human Arbiter Resolution on Devnet",
+      "status": "SUCCESS",
+      "description": "Human arbiter audited receipt against registered spec_hash and signed resolve_dispute on Solana.",
+      "txSignature": "3wVZMr2gDT4goWYsvL2pzzdzDXE2eBmuDbns7KsvwvMdFFQ5Hh1MVYLrK6VLBdbxBzXGVXKffL57rK6E6FhqoY7c",
+      "explorerUrl": "https://explorer.solana.com/tx/3wVZMr2gDT4goWYsvL2pzzdzDXE2eBmuDbns7KsvwvMdFFQ5Hh1MVYLrK6VLBdbxBzXGVXKffL57rK6E6FhqoY7c?cluster=devnet",
+      "details": {
+        "ruling": "BuyerWins",
+        "disputePda": "8vKYbW2QoAueFkPnYqSj59ZxC3VLW3DU4K7DBExjf98M"
+      }
+    },
+    {
+      "step": 5,
+      "title": "Refund Settlement & Provider Slashed",
+      "status": "SUCCESS",
+      "description": "Buyer received 5.0 USDC claim refund + 1.0 USDC returned deposit; provider bond slashed by 5.0 USDC.",
+      "details": {
+        "refundPayout": "6.0 USDC",
+        "remainingBond": "95000000 units (95 USDC)",
+        "totalSlashed": "5000000 units (5 USDC)",
+        "disputesBuyerWon": 1
+      }
+    }
+  ]
+}

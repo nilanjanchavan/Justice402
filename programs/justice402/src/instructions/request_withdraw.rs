@@ -21,6 +21,7 @@ pub fn handle_request_withdraw(ctx: Context<RequestWithdraw>) -> Result<()> {
     let provider = &mut ctx.accounts.provider;
 
     require!(provider.locked == 0, JusticeError::BondLocked);
+    require!(provider.open_disputes == 0, JusticeError::ActiveDisputesPending);
 
     provider.withdraw_requested_at = clock.unix_timestamp;
 

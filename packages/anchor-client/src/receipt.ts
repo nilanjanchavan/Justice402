@@ -3,7 +3,7 @@ import { createHash } from "crypto";
 import BN from "bn.js";
 
 export const RECEIPT_VERSION = 1;
-export const RECEIPT_CANONICAL_LEN = 217;
+export const RECEIPT_CANONICAL_LEN = 249;
 
 const U64_MAX = new BN("ffffffffffffffff", 16);
 const I64_MIN = new BN("-8000000000000000", 16);
@@ -13,6 +13,7 @@ export interface ReceiptData {
   version: number;
   provider: PublicKey;
   buyer: PublicKey;
+  specHash: Buffer;        // 32 bytes
   requestHash: Buffer;     // 32 bytes
   responseHash: Buffer;    // 32 bytes
   paymentReference: Buffer;// 64 bytes
@@ -87,32 +88,37 @@ export function encodeReceipt(receipt: ReceiptData): Buffer {
   buyerBytes.copy(buf, offset);
   offset += 32;
 
-  // 4. Request Hash (32 bytes)
+  // 4. Spec Hash (32 bytes)
+  if (receipt.specHash.length !== 32) throw new Error("Invalid specHash length");
+  receipt.specHash.copy(buf, offset);
+  offset += 32;
+
+  // 5. Request Hash (32 bytes)
   if (receipt.requestHash.length !== 32) throw new Error("Invalid requestHash length");
   receipt.requestHash.copy(buf, offset);
   offset += 32;
 
-  // 5. Response Hash (32 bytes)
+  // 6. Response Hash (32 bytes)
   if (receipt.responseHash.length !== 32) throw new Error("Invalid responseHash length");
   receipt.responseHash.copy(buf, offset);
   offset += 32;
 
-  // 6. Payment Reference (64 bytes)
+  // 7. Payment Reference (64 bytes)
   if (receipt.paymentReference.length !== 64) throw new Error("Invalid paymentReference length");
   receipt.paymentReference.copy(buf, offset);
   offset += 64;
 
-  // 7. Price (8 bytes u64 LE)
+  // 8. Price (8 bytes u64 LE)
   const priceBN = toU64BN(receipt.price, "price");
   priceBN.toArrayLike(Buffer, "le", 8).copy(buf, offset);
   offset += 8;
 
-  // 8. Timestamp (8 bytes i64 LE two's complement)
+  // 9. Timestamp (8 bytes i64 LE two's complement)
   const tsBN = toI64BN(receipt.timestamp, "timestamp");
   tsBN.toTwos(64).toArrayLike(Buffer, "le", 8).copy(buf, offset);
   offset += 8;
 
-  // 9. Nonce (8 bytes u64 LE)
+  // 10. Nonce (8 bytes u64 LE)
   const nonceBN = toU64BN(receipt.nonce, "nonce");
   nonceBN.toArrayLike(Buffer, "le", 8).copy(buf, offset);
   offset += 8;
@@ -139,6 +145,9 @@ export function decodeReceipt(buf: Buffer): ReceiptData {
   const buyer = new PublicKey(buf.subarray(offset, offset + 32));
   offset += 32;
 
+  const specHash = Buffer.from(buf.subarray(offset, offset + 32));
+  offset += 32;
+
   const requestHash = Buffer.from(buf.subarray(offset, offset + 32));
   offset += 32;
 
@@ -161,6 +170,7 @@ export function decodeReceipt(buf: Buffer): ReceiptData {
     version,
     provider,
     buyer,
+    specHash,
     requestHash,
     responseHash,
     paymentReference,

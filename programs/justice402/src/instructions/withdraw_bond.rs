@@ -43,6 +43,7 @@ pub fn handle_withdraw_bond(
     let provider = &mut ctx.accounts.provider;
 
     require!(provider.locked == 0, JusticeError::BondLocked);
+    require!(provider.open_disputes == 0, JusticeError::ActiveDisputesPending);
     require!(provider.withdraw_requested_at > 0, JusticeError::WithdrawNotRequested);
 
     let unlock_time = provider.withdraw_requested_at

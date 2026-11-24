@@ -1,4 +1,6 @@
-target/
+target/*
+!target/idl/
+!target/types/
 .anchor/
 node_modules/
 .env
@@ -11,8 +13,11 @@ wallet.json
 buyer.json
 provider.json
 arbiter.json
+private-notes/
 .DS_Store
 dist/
+**/dist/
 build/
 .system_generated/
 
+.next/
