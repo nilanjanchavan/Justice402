@@ -35,6 +35,26 @@ export interface BuyerPurchaseResult {
   receipt?: ReceiptData;
 }
 
+export function verifyReceiptSignature(
+  canonicalBytes: Buffer,
+  signature: Buffer,
+  providerPubkey: PublicKey
+): boolean {
+  try {
+    const pubKey = crypto.createPublicKey({
+      key: Buffer.concat([
+        Buffer.from("302a300506032b6570032100", "hex"),
+        providerPubkey.toBuffer(),
+      ]),
+      format: "der",
+      type: "spki",
+    });
+    return crypto.verify(null, canonicalBytes, pubKey, signature);
+  } catch {
+    return false;
+  }
+}
+
 export async function executeBuyerPurchase(params: BuyerPurchaseParams): Promise<BuyerPurchaseResult> {
   const {
     program,
@@ -79,7 +99,31 @@ export async function executeBuyerPurchase(params: BuyerPurchaseParams): Promise
   const signatureBytes = Buffer.from(signatureBase64, "base64");
   const receipt = decodeReceipt(receiptBytes);
 
-  // 3. Sanity-check the response against specification
+  // 3. Bind decoded receipt to selected purchase identities and verify signature
+  if (!receipt.provider.equals(providerWallet)) {
+    throw new Error(
+      `Receipt provider mismatch: expected ${providerWallet.toBase58()}, received ${receipt.provider.toBase58()}`
+    );
+  }
+  if (!receipt.buyer.equals(buyerKeypair.publicKey)) {
+    throw new Error(
+      `Receipt buyer mismatch: expected ${buyerKeypair.publicKey.toBase58()}, received ${receipt.buyer.toBase58()}`
+    );
+  }
+  if (!verifyReceiptSignature(receiptBytes, signatureBytes, providerWallet)) {
+    throw new Error("Provider receipt signature verification failed");
+  }
+
+  // 4. Verify returned response data matches receipt.responseHash commitment
+  const rawResponseBytes = Buffer.from(JSON.stringify(bodyJson?.data ?? rawBodyText));
+  const computedResponseHash = crypto.createHash("sha256").update(rawResponseBytes).digest();
+  if (!computedResponseHash.equals(receipt.responseHash)) {
+    throw new Error(
+      `Receipt responseHash mismatch: raw response does not match receipt commitment`
+    );
+  }
+
+  // 5. Sanity-check the response against specification
   const violations: string[] = [];
 
   if (!bodyJson || !bodyJson.data) {
@@ -113,21 +157,21 @@ export async function executeBuyerPurchase(params: BuyerPurchaseParams): Promise
       }
     }
 
-    // Freshness check
+    // Freshness check with shared -60s clock skew tolerance
     if (spec.freshnessRule?.maxAgeSeconds !== undefined) {
       if (typeof data.observedAt !== "number") {
         violations.push("Freshness violation: missing or non-numeric observedAt field");
       } else {
         const now = Math.floor(Date.now() / 1000);
         const age = now - data.observedAt;
-        if (age < 0 || age > spec.freshnessRule.maxAgeSeconds) {
+        if (age < -60 || age > spec.freshnessRule.maxAgeSeconds) {
           violations.push(`Freshness violation: age ${age}s exceeds max ${spec.freshnessRule.maxAgeSeconds}s`);
         }
       }
     }
   }
 
-  // 4. If sanity checks pass, return success
+  // 6. If sanity checks pass, return success
   if (violations.length === 0) {
     return {
       status: "success",
@@ -136,8 +180,7 @@ export async function executeBuyerPurchase(params: BuyerPurchaseParams): Promise
     };
   }
 
-  // 5. If sanity checks fail, open on-chain dispute!
-  const rawResponseBytes = Buffer.from(JSON.stringify(bodyJson?.data ?? rawBodyText));
+  // 7. If sanity checks fail, open on-chain dispute!
   const evidenceHash = crypto.createHash("sha256").update(rawResponseBytes).digest();
 
   if (!params.buyerTokenAccount) {

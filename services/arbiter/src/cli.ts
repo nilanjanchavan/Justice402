@@ -1,5 +1,5 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
-import { ReceiptData, resolveDisputeRuling } from "@justice402/anchor-client";
+import { encodeReceipt, hashReceipt, ReceiptData, resolveDisputeRuling } from "@justice402/anchor-client";
 import { runDeterministicSpecCheck, SpecCheckResults } from "./verifier";
 
 export interface ArbiterEvaluationOptions {
@@ -65,6 +65,16 @@ export async function evaluateAndRule(options: ArbiterEvaluationOptions): Promis
     autoApprove = false,
   } = options;
 
+  // 1. Verify receipt binding to target dispute PDA before evaluation or ruling
+  const disputeAccount: any = await (program.account as any).dispute.fetch(disputePda);
+  const computedReceiptHash = hashReceipt(encodeReceipt(receipt));
+  const onChainReceiptHash = Buffer.from(disputeAccount.receiptHash);
+  if (!computedReceiptHash.equals(onChainReceiptHash)) {
+    throw new Error(
+      `Dispute receipt_hash mismatch: on-chain dispute has ${onChainReceiptHash.toString("hex")}, but evaluated receipt has ${computedReceiptHash.toString("hex")}`
+    );
+  }
+
   const results = runDeterministicSpecCheck({
     specContent,
     expectedSpecHash: receipt.specHash,
@@ -75,7 +85,19 @@ export async function evaluateAndRule(options: ArbiterEvaluationOptions): Promis
   const report = formatAuditReport(receipt, results);
   console.log(report);
 
-  // Deterministic recommendation
+  // Stop evaluation before signing or submitting a ruling if commitments do not match
+  if (!results.specHashMatch) {
+    throw new Error(
+      `Spec hash mismatch: evaluated spec content sha256 does not match receipt spec_hash commitment`
+    );
+  }
+  if (!results.responseHashMatch) {
+    throw new Error(
+      `Response hash mismatch: submitted raw evidence sha256 does not match receipt response_hash commitment`
+    );
+  }
+
+  // Deterministic recommendation: select a merits ruling after both commitments match
   const ruling: "BuyerWins" | "ProviderWins" = results.isValid ? "ProviderWins" : "BuyerWins";
 
   // Manual confirmation required unless --yes or autoApprove

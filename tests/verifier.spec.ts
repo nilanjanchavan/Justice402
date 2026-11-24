@@ -102,5 +102,53 @@ describe("Deterministic Spec Check & Freshness Tests", () => {
     expect(result.freshnessValid).to.be.false;
     expect(result.errors.some((e) => e.includes("Field 'observedAt' is missing from response"))).to.be.true;
   });
+
+  it("4. Production default path uses receipt.timestamp when currentTime is omitted", () => {
+    // observedAt is 45s before receipt.timestamp; wall-clock time is long past the freshness window
+    const honestData = {
+      city: "SolanaBeach",
+      temperature: 24.5,
+      humidity: 55,
+      observedAt: now - 45, // 45s before receipt timestamp (<= 300s)
+    };
+    const rawResponse = Buffer.from(JSON.stringify(honestData));
+    const receipt = createTestReceiptForResponse(rawResponse);
+
+    // Omit currentTime to exercise production default path
+    const result = runDeterministicSpecCheck({
+      specContent: SPEC_CANONICAL_JSON,
+      expectedSpecHash: SPEC_HASH,
+      receipt,
+      evidenceBytes: rawResponse,
+    });
+
+    expect(result.isValid).to.be.true;
+    expect(result.freshnessValid).to.be.true;
+    expect(result.errors.length).to.equal(0);
+  });
+
+  it("5. Production default path rejects stale response relative to receipt.timestamp when currentTime is omitted", () => {
+    // observedAt is 400s before receipt.timestamp (> 300s maxAge)
+    const staleData = {
+      city: "SolanaBeach",
+      temperature: 24.5,
+      humidity: 55,
+      observedAt: now - 400,
+    };
+    const rawResponse = Buffer.from(JSON.stringify(staleData));
+    const receipt = createTestReceiptForResponse(rawResponse);
+
+    // Omit currentTime to exercise production default path
+    const result = runDeterministicSpecCheck({
+      specContent: SPEC_CANONICAL_JSON,
+      expectedSpecHash: SPEC_HASH,
+      receipt,
+      evidenceBytes: rawResponse,
+    });
+
+    expect(result.isValid).to.be.false;
+    expect(result.freshnessValid).to.be.false;
+    expect(result.errors.some((e) => e.includes("Response stale: age is 400s, max allowed is 300s"))).to.be.true;
+  });
 });
 

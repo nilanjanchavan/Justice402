@@ -21,7 +21,8 @@ export interface DeterministicCheckParams {
 }
 
 export function runDeterministicSpecCheck(params: DeterministicCheckParams): SpecCheckResults {
-  const { specContent, expectedSpecHash, receipt, evidenceBytes, currentTime = Math.floor(Date.now() / 1000) } = params;
+  const { specContent, expectedSpecHash, receipt, evidenceBytes } = params;
+  const referenceTime = params.currentTime !== undefined ? params.currentTime : Number(receipt.timestamp);
   const errors: string[] = [];
 
   // 1. Verify sha256(spec) == expectedSpecHash
@@ -76,6 +77,20 @@ export function runDeterministicSpecCheck(params: DeterministicCheckParams): Spe
     };
   }
 
+  // Validate evidence shape: reject null, non-objects, and arrays
+  if (evidenceObj === null || typeof evidenceObj !== "object" || Array.isArray(evidenceObj)) {
+    errors.push("Evidence body is not a valid JSON object");
+    return {
+      isValid: false,
+      specHashMatch,
+      responseHashMatch,
+      schemaValid: false,
+      rangesValid: false,
+      freshnessValid: false,
+      errors,
+    };
+  }
+
   // 3. Validate against JSON schema
   const ajv = new Ajv({ allErrors: true });
   let schemaValid = false;
@@ -118,7 +133,7 @@ export function runDeterministicSpecCheck(params: DeterministicCheckParams): Spe
     freshnessValid = false;
     errors.push("Field 'observedAt' must be a valid integer unix timestamp");
   } else if (specObj.freshnessRule?.maxAgeSeconds) {
-    const age = currentTime - evidenceObj.observedAt;
+    const age = referenceTime - evidenceObj.observedAt;
     if (age > specObj.freshnessRule.maxAgeSeconds || age < -60) {
       freshnessValid = false;
       errors.push(`Response stale: age is ${age}s, max allowed is ${specObj.freshnessRule.maxAgeSeconds}s`);
