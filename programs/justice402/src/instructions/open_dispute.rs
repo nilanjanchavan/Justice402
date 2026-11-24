@@ -51,6 +51,7 @@ pub fn handle_open_dispute(
     require!(receipt.version == RECEIPT_VERSION, JusticeError::InvalidReceipt);
     require_keys_eq!(ctx.accounts.buyer.key(), receipt.buyer, JusticeError::UnauthorizedBuyer);
     require_keys_eq!(ctx.accounts.provider.wallet, receipt.provider, JusticeError::WrongSigner);
+    require!(receipt.spec_hash == ctx.accounts.provider.spec_hash, JusticeError::SpecHashMismatch);
 
     // 2. Validate dispute window and reject future-dated receipts exceeding clock skew
     let max_future_time = clock.unix_timestamp
@@ -88,12 +89,17 @@ pub fn handle_open_dispute(
         .checked_add(claim_amount)
         .ok_or(JusticeError::MathOverflow)?;
 
+    provider.open_disputes = provider.open_disputes
+        .checked_add(1)
+        .ok_or(JusticeError::MathOverflow)?;
+
     // 5. Initialize Dispute record
     let receipt_hash = receipt.hash();
     let dispute = &mut ctx.accounts.dispute;
     dispute.receipt_hash = receipt_hash;
     dispute.buyer = ctx.accounts.buyer.key();
     dispute.provider = provider.wallet;
+    dispute.spec_hash = receipt.spec_hash;
     dispute.price = receipt.price;
     dispute.claim_amount = claim_amount;
     dispute.status = DisputeStatus::Open;
@@ -106,6 +112,7 @@ pub fn handle_open_dispute(
         receipt_hash,
         buyer: dispute.buyer,
         provider: dispute.provider,
+        spec_hash: dispute.spec_hash,
         price: dispute.price,
         claim_amount: dispute.claim_amount,
         opened_at: dispute.opened_at,

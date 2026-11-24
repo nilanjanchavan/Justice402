@@ -37,8 +37,9 @@ pub mod justice402 {
     pub fn register_provider(
         ctx: Context<RegisterProvider>,
         bond_amount: u64,
+        spec_hash: [u8; 32],
     ) -> Result<()> {
-        handle_register_provider(ctx, bond_amount)
+        handle_register_provider(ctx, bond_amount, spec_hash)
     }
 
     pub fn top_up(
@@ -79,4 +80,3 @@ pub mod justice402 {
         handle_withdraw_bond(ctx, amount)
     }
 }
-

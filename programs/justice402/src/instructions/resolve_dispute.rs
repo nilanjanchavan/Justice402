@@ -61,6 +61,10 @@ pub fn handle_resolve_dispute(
     let claim_amount = dispute.claim_amount;
     let payout: u64;
 
+    provider.open_disputes = provider.open_disputes
+        .checked_sub(1)
+        .ok_or(JusticeError::MathOverflow)?;
+
     match ruling {
         Ruling::BuyerWins => {
             require_keys_eq!(
@@ -98,6 +102,13 @@ pub fn handle_resolve_dispute(
                 .checked_sub(claim_amount)
                 .ok_or(JusticeError::MathOverflow)?;
 
+            provider.disputes_buyer_won = provider.disputes_buyer_won
+                .checked_add(1)
+                .ok_or(JusticeError::MathOverflow)?;
+            provider.total_slashed = provider.total_slashed
+                .checked_add(payout)
+                .ok_or(JusticeError::MathOverflow)?;
+
             dispute.status = DisputeStatus::BuyerWins;
         }
         Ruling::ProviderWins => {
@@ -105,6 +116,10 @@ pub fn handle_resolve_dispute(
 
             provider.locked = provider.locked
                 .checked_sub(claim_amount)
+                .ok_or(JusticeError::MathOverflow)?;
+
+            provider.disputes_provider_won = provider.disputes_provider_won
+                .checked_add(1)
                 .ok_or(JusticeError::MathOverflow)?;
 
             dispute.status = DisputeStatus::ProviderWins;

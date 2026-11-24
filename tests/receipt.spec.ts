@@ -22,6 +22,7 @@ describe("Receipt Canonical Encoding & Vector Tests", () => {
         version: vector.version,
         provider: new PublicKey(Buffer.from(vector.provider, "hex")),
         buyer: new PublicKey(Buffer.from(vector.buyer, "hex")),
+        specHash: Buffer.from(vector.specHash, "hex"),
         requestHash: Buffer.from(vector.requestHash, "hex"),
         responseHash: Buffer.from(vector.responseHash, "hex"),
         paymentReference: Buffer.from(vector.paymentReference, "hex"),
@@ -43,6 +44,7 @@ describe("Receipt Canonical Encoding & Vector Tests", () => {
       expect(decoded.version).to.equal(RECEIPT_VERSION);
       expect(decoded.provider.toBuffer().toString("hex")).to.equal(vector.provider);
       expect(decoded.buyer.toBuffer().toString("hex")).to.equal(vector.buyer);
+      expect(decoded.specHash.toString("hex")).to.equal(vector.specHash);
       expect(decoded.requestHash.toString("hex")).to.equal(vector.requestHash);
       expect(decoded.responseHash.toString("hex")).to.equal(vector.responseHash);
       expect(decoded.paymentReference.toString("hex")).to.equal(vector.paymentReference);
@@ -56,7 +58,7 @@ describe("Receipt Canonical Encoding & Vector Tests", () => {
     const invalidShort = Buffer.alloc(100);
     expect(() => decodeReceipt(invalidShort)).to.throw(/Invalid buffer length/);
 
-    const invalidLong = Buffer.alloc(250);
+    const invalidLong = Buffer.alloc(300);
     expect(() => decodeReceipt(invalidLong)).to.throw(/Invalid buffer length/);
   });
 
@@ -65,6 +67,7 @@ describe("Receipt Canonical Encoding & Vector Tests", () => {
       version: 1,
       provider: PublicKey.default,
       buyer: PublicKey.default,
+      specHash: Buffer.alloc(32, 4),
       requestHash: Buffer.alloc(32, 1),
       responseHash: Buffer.alloc(32, 2),
       paymentReference: Buffer.alloc(64, 3),
@@ -93,4 +96,3 @@ describe("Receipt Canonical Encoding & Vector Tests", () => {
     expect(() => encodeReceipt({ ...baseReceipt, price: tooBigU64 })).to.throw(/unsigned 64-bit/);
   });
 });
-

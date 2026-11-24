@@ -53,6 +53,12 @@ pub enum JusticeError {
     #[msg("Cannot withdraw while funds are locked in active disputes")]
     BondLocked,
 
+    #[msg("Cannot withdraw while disputes are open")]
+    ActiveDisputesPending,
+
+    #[msg("Receipt spec hash does not match provider registered spec hash")]
+    SpecHashMismatch,
+
     #[msg("Withdraw delay has not elapsed since request")]
     WithdrawDelayNotElapsed,
 
@@ -62,4 +68,3 @@ pub enum JusticeError {
     #[msg("Requested amount exceeds available unreserved bond")]
     InsufficientWithdrawBalance,
 }
-

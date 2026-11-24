@@ -57,6 +57,10 @@ pub fn handle_claim_timeout(ctx: Context<ClaimTimeout>) -> Result<()> {
     let provider = &mut ctx.accounts.provider;
     let payout = dispute.claim_amount;
 
+    provider.open_disputes = provider.open_disputes
+        .checked_sub(1)
+        .ok_or(JusticeError::MathOverflow)?;
+
     // Transfer refund from vault to buyer
     let config_key = ctx.accounts.config.key();
     let vault_bump = ctx.accounts.config.vault_bump;
@@ -83,6 +87,13 @@ pub fn handle_claim_timeout(ctx: Context<ClaimTimeout>) -> Result<()> {
         .ok_or(JusticeError::MathOverflow)?;
     provider.locked = provider.locked
         .checked_sub(dispute.claim_amount)
+        .ok_or(JusticeError::MathOverflow)?;
+
+    provider.disputes_buyer_won = provider.disputes_buyer_won
+        .checked_add(1)
+        .ok_or(JusticeError::MathOverflow)?;
+    provider.total_slashed = provider.total_slashed
+        .checked_add(payout)
         .ok_or(JusticeError::MathOverflow)?;
 
     dispute.status = DisputeStatus::TimedOut;

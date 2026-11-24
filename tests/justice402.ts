@@ -24,6 +24,7 @@ import {
   ReceiptData,
   RECEIPT_VERSION,
 } from "../packages/anchor-client/src/receipt";
+import { getProviderTrust } from "../packages/anchor-client/src/index";
 import idl from "../target/idl/justice402.json";
 
 function signEd25519(message: Buffer, secretKey: Uint8Array): Buffer {
@@ -53,6 +54,21 @@ function getErrorMessage(err: any): string {
   return msg;
 }
 
+function toAnchorReceipt(r: ReceiptData) {
+  return {
+    version: r.version,
+    provider: r.provider,
+    buyer: r.buyer,
+    specHash: Array.from(r.specHash),
+    requestHash: Array.from(r.requestHash),
+    responseHash: Array.from(r.responseHash),
+    paymentReference: Array.from(r.paymentReference),
+    price: r.price as BN,
+    timestamp: r.timestamp as BN,
+    nonce: r.nonce as BN,
+  };
+}
+
 describe("justice402 program test suite", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
@@ -76,6 +92,7 @@ describe("justice402 program test suite", () => {
   let dispute101Receipt: ReceiptData;
   let dispute201Receipt: ReceiptData;
 
+  const PROVIDER_SPEC_HASH = crypto.createHash("sha256").update("test-spec-v1").digest();
   const DISPUTE_WINDOW = new BN(15); // 15 seconds
   const RESOLVE_TIMEOUT = new BN(3); // 3 seconds
   const WITHDRAW_DELAY = new BN(3);  // 3 seconds
@@ -94,6 +111,28 @@ describe("justice402 program test suite", () => {
       }
       await new Promise((r) => setTimeout(r, 400));
     }
+  }
+
+  function createTestReceipt(opts: {
+    price?: number | BN;
+    timestamp?: number;
+    nonce?: number;
+    buyer?: PublicKey;
+    providerKey?: PublicKey;
+    specHash?: Buffer;
+  } = {}): ReceiptData {
+    return {
+      version: RECEIPT_VERSION,
+      provider: opts.providerKey || providerWallet.publicKey,
+      buyer: opts.buyer || buyerWallet.publicKey,
+      specHash: opts.specHash || PROVIDER_SPEC_HASH,
+      requestHash: crypto.createHash("sha256").update("request-test").digest(),
+      responseHash: crypto.createHash("sha256").update("response-test").digest(),
+      paymentReference: Buffer.alloc(64, 7),
+      price: opts.price !== undefined ? new BN(opts.price.toString()) : new BN(20_000_000), // 20 USDC
+      timestamp: new BN(opts.timestamp !== undefined ? opts.timestamp : Math.floor(Date.now() / 1000)),
+      nonce: new BN(opts.nonce !== undefined ? opts.nonce : 1),
+    };
   }
 
   before(async () => {
@@ -169,9 +208,9 @@ describe("justice402 program test suite", () => {
     expect(vaultInfo.owner.toBase58()).to.equal(vaultPda.toBase58());
   });
 
-  it("2. Registers provider and deposits initial bond", async () => {
+  it("2. Registers provider with spec_hash, track record counters, and deposits initial bond", async () => {
     await program.methods
-      .registerProvider(INITIAL_BOND)
+      .registerProvider(INITIAL_BOND, Array.from(PROVIDER_SPEC_HASH))
       .accounts({
         providerWallet: providerWallet.publicKey,
         provider: providerPda,
@@ -189,9 +228,25 @@ describe("justice402 program test suite", () => {
     expect(providerAccount.bond.toString()).to.equal(INITIAL_BOND.toString());
     expect(providerAccount.locked.toString()).to.equal("0");
     expect(providerAccount.withdrawRequestedAt.toString()).to.equal("0");
+    expect(Buffer.from(providerAccount.specHash).toString("hex")).to.equal(PROVIDER_SPEC_HASH.toString("hex"));
+    expect(providerAccount.openDisputes.toString()).to.equal("0");
+    expect(providerAccount.disputesBuyerWon.toString()).to.equal("0");
+    expect(providerAccount.disputesProviderWon.toString()).to.equal("0");
+    expect(providerAccount.totalSlashed.toString()).to.equal("0");
 
     const vaultAccount = await getAccount(provider.connection, vaultPda);
     expect(vaultAccount.amount.toString()).to.equal(INITIAL_BOND.toString());
+
+    // Test getProviderTrust client function
+    const trust = await getProviderTrust(program, providerWallet.publicKey);
+    expect(trust.wallet.toBase58()).to.equal(providerWallet.publicKey.toBase58());
+    expect(trust.bond.toString()).to.equal(INITIAL_BOND.toString());
+    expect(trust.locked.toString()).to.equal("0");
+    expect(trust.openDisputes.toString()).to.equal("0");
+    expect(trust.wins.toString()).to.equal("0");
+    expect(trust.losses.toString()).to.equal("0");
+    expect(trust.totalSlashed.toString()).to.equal("0");
+    expect(trust.specHash.toString("hex")).to.equal(PROVIDER_SPEC_HASH.toString("hex"));
   });
 
   it("3. Tops up provider bond and resets pending withdrawal", async () => {
@@ -216,26 +271,6 @@ describe("justice402 program test suite", () => {
     expect(vaultAccount.amount.toString()).to.equal(expectedBond.toString());
   });
 
-  function createTestReceipt(opts: {
-    price?: number | BN;
-    timestamp?: number;
-    nonce?: number;
-    buyer?: PublicKey;
-    providerKey?: PublicKey;
-  } = {}): ReceiptData {
-    return {
-      version: RECEIPT_VERSION,
-      provider: opts.providerKey || providerWallet.publicKey,
-      buyer: opts.buyer || buyerWallet.publicKey,
-      requestHash: crypto.createHash("sha256").update("request-test").digest(),
-      responseHash: crypto.createHash("sha256").update("response-test").digest(),
-      paymentReference: Buffer.alloc(64, 7),
-      price: opts.price ? new BN(opts.price.toString()) : new BN(20_000_000), // 20 USDC
-      timestamp: new BN(opts.timestamp !== undefined ? opts.timestamp : Math.floor(Date.now() / 1000)),
-      nonce: new BN(opts.nonce || 1),
-    };
-  }
-
   it("4. Opens dispute with valid Ed25519 signature instruction introspection", async () => {
     dispute101Receipt = createTestReceipt({ nonce: 101, timestamp: Math.floor(Date.now() / 1000) });
     const canonicalBytes = encodeReceipt(dispute101Receipt);
@@ -250,20 +285,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: dispute101Receipt.version,
-          provider: dispute101Receipt.provider,
-          buyer: dispute101Receipt.buyer,
-          requestHash: Array.from(dispute101Receipt.requestHash),
-          responseHash: Array.from(dispute101Receipt.responseHash),
-          paymentReference: Array.from(dispute101Receipt.paymentReference),
-          price: dispute101Receipt.price as BN,
-          timestamp: dispute101Receipt.timestamp as BN,
-          nonce: dispute101Receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 1))
-      )
+      .openDispute(toAnchorReceipt(dispute101Receipt), Array.from(Buffer.alloc(32, 1)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -280,11 +302,50 @@ describe("justice402 program test suite", () => {
     const disputeAccount: any = await program.account.dispute.fetch(disputePda);
     expect(disputeAccount.buyer.toBase58()).to.equal(buyerWallet.publicKey.toBase58());
     expect(disputeAccount.provider.toBase58()).to.equal(providerWallet.publicKey.toBase58());
+    expect(Buffer.from(disputeAccount.specHash).toString("hex")).to.equal(PROVIDER_SPEC_HASH.toString("hex"));
     expect(disputeAccount.claimAmount.toString()).to.equal("20000000");
     expect(disputeAccount.status.open).to.not.be.undefined;
 
     const providerAccount: any = await program.account.provider.fetch(providerPda);
     expect(providerAccount.locked.toString()).to.equal("20000000");
+    expect(providerAccount.openDisputes.toString()).to.equal("1");
+  });
+
+  it("4b. Rejects dispute opening when receipt spec_hash does not match provider spec_hash", async () => {
+    const wrongSpecHash = crypto.createHash("sha256").update("different-spec-content").digest();
+    const mismatchedReceipt = createTestReceipt({ nonce: 1012, specHash: wrongSpecHash });
+    const canonicalBytes = encodeReceipt(mismatchedReceipt);
+    const receiptHash = hashReceipt(canonicalBytes);
+    const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
+
+    const sig = signEd25519(canonicalBytes, providerWallet.secretKey);
+    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+      publicKey: providerWallet.publicKey.toBytes(),
+      message: canonicalBytes,
+      signature: sig,
+    });
+
+    const openIx = await program.methods
+      .openDispute(toAnchorReceipt(mismatchedReceipt), Array.from(Buffer.alloc(32, 1)))
+      .accounts({
+        buyer: buyerWallet.publicKey,
+        provider: providerPda,
+        dispute: disputePda,
+        config: configPda,
+        instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    const tx = new Transaction().add(ed25519Ix).add(openIx);
+    let capturedErr: any = null;
+    try {
+      await provider.sendAndConfirm(tx, [buyerWallet]);
+    } catch (err: any) {
+      capturedErr = err;
+    }
+    expect(capturedErr, "SpecHashMismatch must fail").to.not.be.null;
+    expect(getErrorMessage(capturedErr)).to.include("SpecHashMismatch");
   });
 
   it("5. Rejects duplicate dispute opening with identical receipt", async () => {
@@ -300,20 +361,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: dispute101Receipt.version,
-          provider: dispute101Receipt.provider,
-          buyer: dispute101Receipt.buyer,
-          requestHash: Array.from(dispute101Receipt.requestHash),
-          responseHash: Array.from(dispute101Receipt.responseHash),
-          paymentReference: Array.from(dispute101Receipt.paymentReference),
-          price: dispute101Receipt.price as BN,
-          timestamp: dispute101Receipt.timestamp as BN,
-          nonce: dispute101Receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 1))
-      )
+      .openDispute(toAnchorReceipt(dispute101Receipt), Array.from(Buffer.alloc(32, 1)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -341,7 +389,7 @@ describe("justice402 program test suite", () => {
     const receiptHash = hashReceipt(canonicalBytes);
     const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
 
-    // Sign a 217-byte message that differs from canonical receipt
+    // Sign a 249-byte message that differs from canonical receipt
     const wrongMessage = Buffer.from(canonicalBytes);
     wrongMessage[wrongMessage.length - 1] ^= 0xff; // flip last byte
     const sig = signEd25519(wrongMessage, providerWallet.secretKey);
@@ -352,20 +400,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: receipt.version,
-          provider: receipt.provider,
-          buyer: receipt.buyer,
-          requestHash: Array.from(receipt.requestHash),
-          responseHash: Array.from(receipt.responseHash),
-          paymentReference: Array.from(receipt.paymentReference),
-          price: receipt.price as BN,
-          timestamp: receipt.timestamp as BN,
-          nonce: receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 1))
-      )
+      .openDispute(toAnchorReceipt(receipt), Array.from(Buffer.alloc(32, 1)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -402,20 +437,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: receipt.version,
-          provider: receipt.provider,
-          buyer: receipt.buyer,
-          requestHash: Array.from(receipt.requestHash),
-          responseHash: Array.from(receipt.responseHash),
-          paymentReference: Array.from(receipt.paymentReference),
-          price: receipt.price as BN,
-          timestamp: receipt.timestamp as BN,
-          nonce: receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 1))
-      )
+      .openDispute(toAnchorReceipt(receipt), Array.from(Buffer.alloc(32, 1)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -454,20 +476,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: receipt.version,
-          provider: receipt.provider,
-          buyer: receipt.buyer,
-          requestHash: Array.from(receipt.requestHash),
-          responseHash: Array.from(receipt.responseHash),
-          paymentReference: Array.from(receipt.paymentReference),
-          price: receipt.price as BN,
-          timestamp: receipt.timestamp as BN,
-          nonce: receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 1))
-      )
+      .openDispute(toAnchorReceipt(receipt), Array.from(Buffer.alloc(32, 1)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -487,7 +496,6 @@ describe("justice402 program test suite", () => {
     }
     expect(capturedErr, "Transaction should fail with corrupted signature").to.not.be.null;
 
-    // Verify dispute was NOT created
     const disputeAccount = await program.account.dispute.fetchNullable(disputePda);
     expect(disputeAccount).to.be.null;
   });
@@ -499,20 +507,7 @@ describe("justice402 program test suite", () => {
     const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: receipt.version,
-          provider: receipt.provider,
-          buyer: receipt.buyer,
-          requestHash: Array.from(receipt.requestHash),
-          responseHash: Array.from(receipt.responseHash),
-          paymentReference: Array.from(receipt.paymentReference),
-          price: receipt.price as BN,
-          timestamp: receipt.timestamp as BN,
-          nonce: receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 1))
-      )
+      .openDispute(toAnchorReceipt(receipt), Array.from(Buffer.alloc(32, 1)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -558,20 +553,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: receipt.version,
-          provider: receipt.provider,
-          buyer: receipt.buyer,
-          requestHash: Array.from(receipt.requestHash),
-          responseHash: Array.from(receipt.responseHash),
-          paymentReference: Array.from(receipt.paymentReference),
-          price: receipt.price as BN,
-          timestamp: receipt.timestamp as BN,
-          nonce: receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 1))
-      )
+      .openDispute(toAnchorReceipt(receipt), Array.from(Buffer.alloc(32, 1)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -609,20 +591,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: receipt.version,
-          provider: receipt.provider,
-          buyer: receipt.buyer,
-          requestHash: Array.from(receipt.requestHash),
-          responseHash: Array.from(receipt.responseHash),
-          paymentReference: Array.from(receipt.paymentReference),
-          price: receipt.price as BN,
-          timestamp: receipt.timestamp as BN,
-          nonce: receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 1))
-      )
+      .openDispute(toAnchorReceipt(receipt), Array.from(Buffer.alloc(32, 1)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -660,20 +629,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: receipt.version,
-          provider: receipt.provider,
-          buyer: receipt.buyer,
-          requestHash: Array.from(receipt.requestHash),
-          responseHash: Array.from(receipt.responseHash),
-          paymentReference: Array.from(receipt.paymentReference),
-          price: receipt.price as BN,
-          timestamp: receipt.timestamp as BN,
-          nonce: receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 1))
-      )
+      .openDispute(toAnchorReceipt(receipt), Array.from(Buffer.alloc(32, 1)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -709,20 +665,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: receipt.version,
-          provider: receipt.provider,
-          buyer: receipt.buyer,
-          requestHash: Array.from(receipt.requestHash),
-          responseHash: Array.from(receipt.responseHash),
-          paymentReference: Array.from(receipt.paymentReference),
-          price: receipt.price as BN,
-          timestamp: receipt.timestamp as BN,
-          nonce: receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 1))
-      )
+      .openDispute(toAnchorReceipt(receipt), Array.from(Buffer.alloc(32, 1)))
       .accounts({
         buyer: attackerWallet.publicKey, // ATTACKER CALLER!
         provider: providerPda,
@@ -764,20 +707,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: dispute201Receipt.version,
-          provider: dispute201Receipt.provider,
-          buyer: dispute201Receipt.buyer,
-          requestHash: Array.from(dispute201Receipt.requestHash),
-          responseHash: Array.from(dispute201Receipt.responseHash),
-          paymentReference: Array.from(dispute201Receipt.paymentReference),
-          price: dispute201Receipt.price as BN,
-          timestamp: dispute201Receipt.timestamp as BN,
-          nonce: dispute201Receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 2))
-      )
+      .openDispute(toAnchorReceipt(dispute201Receipt), Array.from(Buffer.alloc(32, 2)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -795,9 +725,10 @@ describe("justice402 program test suite", () => {
     expect(disputeAccount.price.toString()).to.equal("90000000");
     // Claim amount must be capped at 50 USDC (PAYOUT_CAP)
     expect(disputeAccount.claimAmount.toString()).to.equal(PAYOUT_CAP.toString());
+    expect(Buffer.from(disputeAccount.specHash).toString("hex")).to.equal(PROVIDER_SPEC_HASH.toString("hex"));
   });
 
-  it("13. Arbiter resolves dispute: BuyerWins pays refund up to cap", async () => {
+  it("13. Arbiter resolves dispute: BuyerWins pays refund up to cap and updates track record", async () => {
     const receiptHash = hashReceipt(encodeReceipt(dispute201Receipt));
     const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
 
@@ -833,6 +764,11 @@ describe("justice402 program test suite", () => {
     const expectedLocked = new BN(providerAccountBefore.locked.toString()).sub(PAYOUT_CAP);
     expect(providerAccountAfter.bond.toString()).to.equal(expectedBond.toString());
     expect(providerAccountAfter.locked.toString()).to.equal(expectedLocked.toString());
+
+    // Track record counters
+    expect(providerAccountAfter.openDisputes.toString()).to.equal("1"); // 101 is still open
+    expect(providerAccountAfter.disputesBuyerWon.toString()).to.equal("1");
+    expect(providerAccountAfter.totalSlashed.toString()).to.equal(PAYOUT_CAP.toString());
   });
 
   it("14. Rejects resolve_dispute by unauthorized non-arbiter", async () => {
@@ -888,7 +824,7 @@ describe("justice402 program test suite", () => {
     expect(getErrorMessage(capturedErr)).to.include("DisputeNotOpen");
   });
 
-  it("16. Arbiter resolves ProviderWins: unlocks bond without buyer payout", async () => {
+  it("16. Arbiter resolves ProviderWins: unlocks bond without buyer payout, updates provider wins", async () => {
     // Open dispute 108 for 20 USDC and immediately resolve ProviderWins before timeout
     const receipt108 = createTestReceipt({ nonce: 108, price: new BN(20_000_000) });
     const canonicalBytes = encodeReceipt(receipt108);
@@ -903,20 +839,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: receipt108.version,
-          provider: receipt108.provider,
-          buyer: receipt108.buyer,
-          requestHash: Array.from(receipt108.requestHash),
-          responseHash: Array.from(receipt108.responseHash),
-          paymentReference: Array.from(receipt108.paymentReference),
-          price: receipt108.price as BN,
-          timestamp: receipt108.timestamp as BN,
-          nonce: receipt108.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 8))
-      )
+      .openDispute(toAnchorReceipt(receipt108), Array.from(Buffer.alloc(32, 8)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -931,6 +854,7 @@ describe("justice402 program test suite", () => {
 
     const buyerTokenBefore = await getAccount(provider.connection, buyerTokenAccount);
     const providerAccountBefore: any = await program.account.provider.fetch(providerPda);
+    expect(providerAccountBefore.openDisputes.toString()).to.equal("2"); // 101 and 108
 
     await program.methods
       .resolveDispute({ providerWins: {} }, Array.from(Buffer.alloc(32, 8)))
@@ -958,6 +882,10 @@ describe("justice402 program test suite", () => {
     expect(providerAccountAfter.bond.toString()).to.equal(providerAccountBefore.bond.toString());
     const expectedLocked = new BN(providerAccountBefore.locked.toString()).sub(new BN(20_000_000));
     expect(providerAccountAfter.locked.toString()).to.equal(expectedLocked.toString());
+
+    // Track record: providerWins incremented to 1, openDisputes decremented to 1
+    expect(providerAccountAfter.openDisputes.toString()).to.equal("1");
+    expect(providerAccountAfter.disputesProviderWon.toString()).to.equal("1");
   });
 
   it("17. Timeout refund: buyer claims refund if arbiter is silent past timeout, arbiter rejected after timeout", async () => {
@@ -975,20 +903,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: receipt.version,
-          provider: receipt.provider,
-          buyer: receipt.buyer,
-          requestHash: Array.from(receipt.requestHash),
-          responseHash: Array.from(receipt.responseHash),
-          paymentReference: Array.from(receipt.paymentReference),
-          price: receipt.price as BN,
-          timestamp: receipt.timestamp as BN,
-          nonce: receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 3))
-      )
+      .openDispute(toAnchorReceipt(receipt), Array.from(Buffer.alloc(32, 3)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -1053,6 +968,7 @@ describe("justice402 program test suite", () => {
     expect(getErrorMessage(arbiterLateErr)).to.include("ResolveTimeoutElapsed");
 
     const buyerTokenBefore = await getAccount(provider.connection, buyerTokenAccount);
+    const providerAccountBefore: any = await program.account.provider.fetch(providerPda);
 
     // Call claim_timeout past timeout deadline
     await program.methods
@@ -1075,6 +991,13 @@ describe("justice402 program test suite", () => {
     const buyerTokenAfter = await getAccount(provider.connection, buyerTokenAccount);
     const diff = new BN(buyerTokenAfter.amount.toString()).sub(new BN(buyerTokenBefore.amount.toString()));
     expect(diff.toString()).to.equal("15000000");
+
+    const providerAccountAfter: any = await program.account.provider.fetch(providerPda);
+    // Timeout refund counts as a loss (buyer won refund)
+    const expectedBuyerWon = new BN(providerAccountBefore.disputesBuyerWon.toString()).add(new BN(1));
+    expect(providerAccountAfter.disputesBuyerWon.toString()).to.equal(expectedBuyerWon.toString());
+    const expectedSlashed = new BN(providerAccountBefore.totalSlashed.toString()).add(new BN(15_000_000));
+    expect(providerAccountAfter.totalSlashed.toString()).to.equal(expectedSlashed.toString());
   });
 
   it("18. Withdraw restrictions: blocked while funds are locked in active disputes", async () => {
@@ -1092,20 +1015,7 @@ describe("justice402 program test suite", () => {
     });
 
     const openIx = await program.methods
-      .openDispute(
-        {
-          version: receipt.version,
-          provider: receipt.provider,
-          buyer: receipt.buyer,
-          requestHash: Array.from(receipt.requestHash),
-          responseHash: Array.from(receipt.responseHash),
-          paymentReference: Array.from(receipt.paymentReference),
-          price: receipt.price as BN,
-          timestamp: receipt.timestamp as BN,
-          nonce: receipt.nonce as BN,
-        },
-        Array.from(Buffer.alloc(32, 4))
-      )
+      .openDispute(toAnchorReceipt(receipt), Array.from(Buffer.alloc(32, 4)))
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
@@ -1171,7 +1081,7 @@ describe("justice402 program test suite", () => {
       .signers([arbiter])
       .rpc();
 
-    // Also resolve dispute 101 from test 4 to clear all remaining locks
+    // Also resolve dispute 101 from test 4 to clear all remaining open disputes
     const receipt101Hash = hashReceipt(encodeReceipt(dispute101Receipt));
     const [dispute101Pda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receipt101Hash], program.programId);
     await program.methods
@@ -1187,18 +1097,63 @@ describe("justice402 program test suite", () => {
       })
       .signers([buyerWallet])
       .rpc();
+
+    const providerFinal: any = await program.account.provider.fetch(providerPda);
+    expect(providerFinal.locked.toString()).to.equal("0");
+    expect(providerFinal.openDisputes.toString()).to.equal("0");
   });
 
-  it("19. Withdraw restrictions: blocked before delay, succeeds after delay", async () => {
-    // Verify provider.locked == 0
-    const providerAccountBefore: any = await program.account.provider.fetch(providerPda);
-    expect(providerAccountBefore.locked.toString()).to.equal("0");
+  it("18b. Withdraw restrictions: blocked while open_disputes > 0", async () => {
+    // Open dispute 501 for 0 USDC so provider.locked remains 0 but open_disputes is 1
+    const zeroPriceReceipt = createTestReceipt({ nonce: 501, price: 0 });
+    const canonicalBytes = encodeReceipt(zeroPriceReceipt);
+    const receiptHash = hashReceipt(canonicalBytes);
+    const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
 
-    // Calling withdraw_bond before request_withdraw fails
-    let notReqErr: any = null;
+    const sig = signEd25519(canonicalBytes, providerWallet.secretKey);
+    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+      publicKey: providerWallet.publicKey.toBytes(),
+      message: canonicalBytes,
+      signature: sig,
+    });
+
+    const openIx = await program.methods
+      .openDispute(toAnchorReceipt(zeroPriceReceipt), Array.from(Buffer.alloc(32, 5)))
+      .accounts({
+        buyer: buyerWallet.publicKey,
+        provider: providerPda,
+        dispute: disputePda,
+        config: configPda,
+        instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    await provider.sendAndConfirm(new Transaction().add(ed25519Ix).add(openIx), [buyerWallet]);
+
+    const providerWithOpenDispute: any = await program.account.provider.fetch(providerPda);
+    expect(providerWithOpenDispute.locked.toString()).to.equal("0");
+    expect(providerWithOpenDispute.openDisputes.toString()).to.equal("1");
+
+    // Request withdraw succeeds because locked == 0
+    await program.methods
+      .requestWithdraw()
+      .accounts({
+        providerWallet: providerWallet.publicKey,
+        provider: providerPda,
+      })
+      .signers([providerWallet])
+      .rpc();
+
+    const providerRequested: any = await program.account.provider.fetch(providerPda);
+    const unlockTime = Number(providerRequested.withdrawRequestedAt.toString()) + Number(WITHDRAW_DELAY.toString());
+    await waitForTimestamp(unlockTime);
+
+    // withdrawBond should fail with ActiveDisputesPending because openDisputes == 1
+    let withdrawErr: any = null;
     try {
       await program.methods
-        .withdrawBond(new BN(10_000_000))
+        .withdrawBond(new BN(5_000_000))
         .accounts({
           providerWallet: providerWallet.publicKey,
           provider: providerPda,
@@ -1210,10 +1165,35 @@ describe("justice402 program test suite", () => {
         .signers([providerWallet])
         .rpc();
     } catch (err: any) {
-      notReqErr = err;
+      withdrawErr = err;
     }
-    expect(notReqErr, "withdrawBond before request should fail").to.not.be.null;
-    expect(getErrorMessage(notReqErr)).to.include("WithdrawNotRequested");
+    expect(withdrawErr, "Withdraw should fail when open_disputes > 0").to.not.be.null;
+    expect(getErrorMessage(withdrawErr)).to.include("ActiveDisputesPending");
+
+    // Now resolve dispute 501 via claimTimeout (since resolve timeout elapsed while waiting for withdraw delay)
+    await program.methods
+      .claimTimeout()
+      .accounts({
+        buyer: buyerWallet.publicKey,
+        config: configPda,
+        dispute: disputePda,
+        provider: providerPda,
+        vault: vaultPda,
+        buyerTokenAccount,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([buyerWallet])
+      .rpc();
+
+    const providerResolved: any = await program.account.provider.fetch(providerPda);
+    expect(providerResolved.openDisputes.toString()).to.equal("0");
+  });
+
+  it("19. Withdraw restrictions: blocked before delay, succeeds after delay", async () => {
+    // Verify provider.locked == 0 and openDisputes == 0
+    const providerAccountBefore: any = await program.account.provider.fetch(providerPda);
+    expect(providerAccountBefore.locked.toString()).to.equal("0");
+    expect(providerAccountBefore.openDisputes.toString()).to.equal("0");
 
     // Call request_withdraw
     await program.methods

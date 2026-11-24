@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use sha2::{Digest, Sha256};
 
 pub const RECEIPT_VERSION: u8 = 1;
-pub const RECEIPT_CANONICAL_LEN: usize = 217;
+pub const RECEIPT_CANONICAL_LEN: usize = 249;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DisputeStatus {
@@ -42,11 +42,16 @@ pub struct Provider {
     pub bond: u64,                    // 8
     pub locked: u64,                  // 8
     pub withdraw_requested_at: i64,   // 8
+    pub spec_hash: [u8; 32],          // 32 (immutable commitment to off-chain /spec)
+    pub open_disputes: u64,           // 8
+    pub disputes_buyer_won: u64,      // 8
+    pub disputes_provider_won: u64,   // 8
+    pub total_slashed: u64,           // 8
     pub bump: u8,                     // 1
 }
 
 impl Provider {
-    pub const LEN: usize = 8 + 32 + 8 + 8 + 8 + 1;
+    pub const LEN: usize = 8 + 32 + 8 + 8 + 8 + 32 + 8 + 8 + 8 + 8 + 1; // 129
 }
 
 #[account]
@@ -55,6 +60,7 @@ pub struct Dispute {
     pub receipt_hash: [u8; 32],       // 32
     pub buyer: Pubkey,                // 32
     pub provider: Pubkey,             // 32
+    pub spec_hash: [u8; 32],          // 32
     pub price: u64,                   // 8
     pub claim_amount: u64,            // 8
     pub status: DisputeStatus,        // 1
@@ -65,7 +71,7 @@ pub struct Dispute {
 }
 
 impl Dispute {
-    pub const LEN: usize = 8 + 32 + 32 + 32 + 8 + 8 + 1 + 8 + 32 + 32 + 1;
+    pub const LEN: usize = 8 + 32 + 32 + 32 + 32 + 8 + 8 + 1 + 8 + 32 + 32 + 1; // 234
 }
 
 impl Default for DisputeStatus {
@@ -79,6 +85,7 @@ pub struct Receipt {
     pub version: u8,
     pub provider: Pubkey,
     pub buyer: Pubkey,
+    pub spec_hash: [u8; 32],
     pub request_hash: [u8; 32],
     pub response_hash: [u8; 32],
     pub payment_reference: [u8; 64],
@@ -93,12 +100,13 @@ impl Receipt {
         bytes[0] = self.version;
         bytes[1..33].copy_from_slice(self.provider.as_ref());
         bytes[33..65].copy_from_slice(self.buyer.as_ref());
-        bytes[65..97].copy_from_slice(&self.request_hash);
-        bytes[97..129].copy_from_slice(&self.response_hash);
-        bytes[129..193].copy_from_slice(&self.payment_reference);
-        bytes[193..201].copy_from_slice(&self.price.to_le_bytes());
-        bytes[201..209].copy_from_slice(&self.timestamp.to_le_bytes());
-        bytes[209..217].copy_from_slice(&self.nonce.to_le_bytes());
+        bytes[65..97].copy_from_slice(&self.spec_hash);
+        bytes[97..129].copy_from_slice(&self.request_hash);
+        bytes[129..161].copy_from_slice(&self.response_hash);
+        bytes[161..225].copy_from_slice(&self.payment_reference);
+        bytes[225..233].copy_from_slice(&self.price.to_le_bytes());
+        bytes[233..241].copy_from_slice(&self.timestamp.to_le_bytes());
+        bytes[241..249].copy_from_slice(&self.nonce.to_le_bytes());
         bytes
     }
 

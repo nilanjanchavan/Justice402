@@ -40,6 +40,7 @@ pub struct RegisterProvider<'info> {
 pub fn handle_register_provider(
     ctx: Context<RegisterProvider>,
     bond_amount: u64,
+    spec_hash: [u8; 32],
 ) -> Result<()> {
     let clock = Clock::get()?;
     let provider = &mut ctx.accounts.provider;
@@ -47,6 +48,11 @@ pub fn handle_register_provider(
     provider.bond = 0;
     provider.locked = 0;
     provider.withdraw_requested_at = 0;
+    provider.spec_hash = spec_hash;
+    provider.open_disputes = 0;
+    provider.disputes_buyer_won = 0;
+    provider.disputes_provider_won = 0;
+    provider.total_slashed = 0;
     provider.bump = ctx.bumps.provider;
 
     if bond_amount > 0 {
@@ -63,6 +69,7 @@ pub fn handle_register_provider(
     emit!(ProviderRegistered {
         provider: provider.wallet,
         bond: provider.bond,
+        spec_hash,
         registered_at: clock.unix_timestamp,
     });
 

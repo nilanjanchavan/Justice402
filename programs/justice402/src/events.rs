@@ -6,6 +6,7 @@ pub struct DisputeOpened {
     pub receipt_hash: [u8; 32],
     pub buyer: Pubkey,
     pub provider: Pubkey,
+    pub spec_hash: [u8; 32],
     pub price: u64,
     pub claim_amount: u64,
     pub opened_at: i64,
@@ -26,6 +27,7 @@ pub struct DisputeResolved {
 pub struct ProviderRegistered {
     pub provider: Pubkey,
     pub bond: u64,
+    pub spec_hash: [u8; 32],
     pub registered_at: i64,
 }
 
@@ -48,4 +50,3 @@ pub struct BondWithdrawn {
     pub amount: u64,
     pub remaining_bond: u64,
 }
-
