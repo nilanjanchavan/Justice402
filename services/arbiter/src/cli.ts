@@ -62,6 +62,7 @@ export async function evaluateAndRule(options: ArbiterEvaluationOptions): Promis
     receipt,
     evidenceBytes,
     specContent,
+    autoApprove = false,
   } = options;
 
   const results = runDeterministicSpecCheck({
@@ -77,11 +78,29 @@ export async function evaluateAndRule(options: ArbiterEvaluationOptions): Promis
   // Deterministic recommendation
   const ruling: "BuyerWins" | "ProviderWins" = results.isValid ? "ProviderWins" : "BuyerWins";
 
+  // Manual confirmation required unless --yes or autoApprove
+  const hasYesFlag = process.argv.includes("--yes");
+  if (!autoApprove && !hasYesFlag) {
+    const readline = await import("readline");
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    const answer = await new Promise<string>((resolve) => {
+      rl.question(`\nConfirm arbiter ruling: Sign "${ruling}" on Solana? (y/N): `, resolve);
+    });
+    rl.close();
+    if (answer.trim().toLowerCase() !== "y" && answer.trim().toLowerCase() !== "yes") {
+      throw new Error("Arbiter resolution cancelled by user.");
+    }
+  }
+
   const txSig = await resolveDisputeRuling({
     program,
     arbiterKeypair,
     disputePda,
     providerWallet,
+    buyerWallet: receipt.buyer,
     buyerTokenAccount,
     ruling,
   });

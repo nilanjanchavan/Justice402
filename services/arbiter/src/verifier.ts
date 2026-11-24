@@ -109,10 +109,16 @@ export function runDeterministicSpecCheck(params: DeterministicCheckParams): Spe
     }
   }
 
-  // 5. Freshness check
+  // 5. Freshness check using observedAt
   let freshnessValid = true;
-  if (specObj.freshnessRule?.maxAgeSeconds && typeof evidenceObj.timestamp === "number") {
-    const age = currentTime - evidenceObj.timestamp;
+  if (evidenceObj.observedAt === undefined || evidenceObj.observedAt === null) {
+    freshnessValid = false;
+    errors.push("Field 'observedAt' is missing from response; cannot evaluate freshness");
+  } else if (typeof evidenceObj.observedAt !== "number" || !Number.isInteger(evidenceObj.observedAt)) {
+    freshnessValid = false;
+    errors.push("Field 'observedAt' must be a valid integer unix timestamp");
+  } else if (specObj.freshnessRule?.maxAgeSeconds) {
+    const age = currentTime - evidenceObj.observedAt;
     if (age > specObj.freshnessRule.maxAgeSeconds || age < -60) {
       freshnessValid = false;
       errors.push(`Response stale: age is ${age}s, max allowed is ${specObj.freshnessRule.maxAgeSeconds}s`);
@@ -131,4 +137,3 @@ export function runDeterministicSpecCheck(params: DeterministicCheckParams): Spe
     errors,
   };
 }
-

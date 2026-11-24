@@ -19,9 +19,9 @@ export const WEATHER_SERVICE_SPEC: ServiceSpec = {
       city: { type: "string" },
       temperature: { type: "number", minimum: -50, maximum: 60 },
       humidity: { type: "number", minimum: 0, maximum: 100 },
-      timestamp: { type: "number" },
+      observedAt: { type: "integer", minimum: 0 },
     },
-    required: ["city", "temperature", "humidity", "timestamp"],
+    required: ["city", "temperature", "humidity", "observedAt"],
     additionalProperties: false,
   },
   ranges: {
@@ -35,4 +35,3 @@ export const WEATHER_SERVICE_SPEC: ServiceSpec = {
 
 export const SPEC_CANONICAL_JSON = JSON.stringify(WEATHER_SERVICE_SPEC);
 export const SPEC_HASH = crypto.createHash("sha256").update(SPEC_CANONICAL_JSON).digest();
-

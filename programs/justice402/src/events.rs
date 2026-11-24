@@ -9,6 +9,7 @@ pub struct DisputeOpened {
     pub spec_hash: [u8; 32],
     pub price: u64,
     pub claim_amount: u64,
+    pub deposit_amount: u64,
     pub opened_at: i64,
 }
 

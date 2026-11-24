@@ -67,4 +67,7 @@ pub enum JusticeError {
 
     #[msg("Requested amount exceeds available unreserved bond")]
     InsufficientWithdrawBalance,
+
+    #[msg("Maximum open disputes per buyer exceeded for this provider")]
+    TooManyOpenDisputes,
 }

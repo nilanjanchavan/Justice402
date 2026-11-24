@@ -45,6 +45,17 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     res.send(SPEC_CANONICAL_JSON);
   });
 
+  // 2. Mock reference endpoint: /reference/weather (provides objective ground truth)
+  app.get("/reference/weather", (req: Request, res: Response) => {
+    const city = (req.query.city as string) || "SolanaBeach";
+    res.json({
+      city,
+      temperature: 24.5,
+      humidity: 55,
+      observedAt: Math.floor(Date.now() / 1000),
+    });
+  });
+
   // Helper to build and sign receipt
   function buildAndSignReceipt(params: {
     buyerPubkey: PublicKey;
@@ -74,7 +85,7 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     return { receiptData, canonicalBytes, signature };
   }
 
-  // 2. Honest endpoint: /weather
+  // 3. Honest endpoint: /weather
   app.get("/weather", (req: Request, res: Response) => {
     const buyerStr = (req.query.buyer as string) || (req.headers["x-buyer-wallet"] as string);
     const buyerPubkey = buyerStr ? new PublicKey(buyerStr) : PublicKey.default;
@@ -83,7 +94,7 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
       city: "SolanaBeach",
       temperature: 24.5,
       humidity: 55,
-      timestamp: Math.floor(Date.now() / 1000),
+      observedAt: Math.floor(Date.now() / 1000),
     };
 
     const { canonicalBytes, signature } = buildAndSignReceipt({
@@ -103,17 +114,17 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     });
   });
 
-  // 3. Lying endpoint: /weather-lying
+  // 4. Lying endpoint (Gross liar): /weather-lying
   app.get("/weather-lying", (req: Request, res: Response) => {
     const buyerStr = (req.query.buyer as string) || (req.headers["x-buyer-wallet"] as string);
     const buyerPubkey = buyerStr ? new PublicKey(buyerStr) : PublicKey.default;
 
-    // Lying response: out-of-range temperature (9999) and humidity (-50) violating spec ranges
+    // Gross lying response: out-of-range temperature (9999), invalid humidity (-50), stale
     const lyingData = {
       city: "SolanaBeach",
       temperature: 9999, // Out of bounds!
       humidity: -50,     // Out of bounds!
-      timestamp: 0,      // Stale!
+      observedAt: Math.floor(Date.now() / 1000) - 1000, // Stale!
     };
 
     const { canonicalBytes, signature } = buildAndSignReceipt({
@@ -133,6 +144,35 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     });
   });
 
+  // 5. Subtle liar endpoint (Plausible but wrong): /weather-plausible-wrong
+  app.get("/weather-plausible-wrong", (req: Request, res: Response) => {
+    const buyerStr = (req.query.buyer as string) || (req.headers["x-buyer-wallet"] as string);
+    const buyerPubkey = buyerStr ? new PublicKey(buyerStr) : PublicKey.default;
+
+    // Plausible but wrong: valid schema, valid ranges, fresh, but contradicts ground truth (24.5C vs 38.0C)
+    const subtleLyingData = {
+      city: "SolanaBeach",
+      temperature: 38.0,
+      humidity: 80,
+      observedAt: Math.floor(Date.now() / 1000),
+    };
+
+    const { canonicalBytes, signature } = buildAndSignReceipt({
+      buyerPubkey,
+      requestPath: req.originalUrl || "/weather-plausible-wrong",
+      responseData: subtleLyingData,
+    });
+
+    res.setHeader("X-Justice402-Receipt", canonicalBytes.toString("base64"));
+    res.setHeader("X-Justice402-Signature", signature.toString("base64"));
+    res.json({
+      data: subtleLyingData,
+      receipt: {
+        bytesBase64: canonicalBytes.toString("base64"),
+        signatureBase64: signature.toString("base64"),
+      },
+    });
+  });
+
   return app;
 }
-

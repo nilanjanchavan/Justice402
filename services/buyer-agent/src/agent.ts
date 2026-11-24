@@ -13,6 +13,7 @@ export interface BuyerPurchaseParams {
   program: any;
   buyerKeypair: Keypair;
   providerWallet: PublicKey;
+  buyerTokenAccount?: PublicKey;
   providerUrl: string;
   endpoint: string;
   price: BN | number;
@@ -111,6 +112,19 @@ export async function executeBuyerPurchase(params: BuyerPurchaseParams): Promise
         }
       }
     }
+
+    // Freshness check
+    if (spec.freshnessRule?.maxAgeSeconds !== undefined) {
+      if (typeof data.observedAt !== "number") {
+        violations.push("Freshness violation: missing or non-numeric observedAt field");
+      } else {
+        const now = Math.floor(Date.now() / 1000);
+        const age = now - data.observedAt;
+        if (age < 0 || age > spec.freshnessRule.maxAgeSeconds) {
+          violations.push(`Freshness violation: age ${age}s exceeds max ${spec.freshnessRule.maxAgeSeconds}s`);
+        }
+      }
+    }
   }
 
   // 4. If sanity checks pass, return success
@@ -126,10 +140,15 @@ export async function executeBuyerPurchase(params: BuyerPurchaseParams): Promise
   const rawResponseBytes = Buffer.from(JSON.stringify(bodyJson?.data ?? rawBodyText));
   const evidenceHash = crypto.createHash("sha256").update(rawResponseBytes).digest();
 
+  if (!params.buyerTokenAccount) {
+    throw new Error("buyerTokenAccount is required to open an on-chain dispute (for dispute deposit)");
+  }
+
   const { txSig, disputePda } = await openDisputeWithReceipt({
     program,
     buyerKeypair,
     providerWallet,
+    buyerTokenAccount: params.buyerTokenAccount,
     receipt,
     signature: signatureBytes,
     evidenceHash,

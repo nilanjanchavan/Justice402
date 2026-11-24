@@ -30,6 +30,7 @@ export interface ProviderTrust {
   losses: BN;
   disputesProviderWon: BN;
   disputesBuyerWon: BN;
+  disputesTimedOut: BN;
   totalSlashed: BN;
 }
 
@@ -52,6 +53,17 @@ export function getDisputePda(programId: PublicKey, receiptHash: Buffer): [Publi
   return PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], programId);
 }
 
+export function getBuyerRecordPda(
+  programId: PublicKey,
+  providerWallet: PublicKey,
+  buyerWallet: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("buyer_record"), providerWallet.toBuffer(), buyerWallet.toBuffer()],
+    programId
+  );
+}
+
 export async function getProviderTrust(
   program: any,
   providerWallet: PublicKey
@@ -69,6 +81,7 @@ export async function getProviderTrust(
     losses: account.disputesBuyerWon,
     disputesProviderWon: account.disputesProviderWon,
     disputesBuyerWon: account.disputesBuyerWon,
+    disputesTimedOut: account.disputesTimedOut,
     totalSlashed: account.totalSlashed,
   };
 }
@@ -77,17 +90,20 @@ export async function openDisputeWithReceipt(params: {
   program: any;
   buyerKeypair: Keypair;
   providerWallet: PublicKey;
+  buyerTokenAccount: PublicKey;
   receipt: ReceiptData;
   signature: Buffer;
   evidenceHash: Buffer;
 }): Promise<{ txSig: string; disputePda: PublicKey; receiptHash: Buffer }> {
-  const { program, buyerKeypair, providerWallet, receipt, signature, evidenceHash } = params;
+  const { program, buyerKeypair, providerWallet, buyerTokenAccount, receipt, signature, evidenceHash } = params;
 
   const canonicalBytes = encodeReceipt(receipt);
   const receiptHash = hashReceipt(canonicalBytes);
   const [disputePda] = getDisputePda(program.programId, receiptHash);
   const [providerPda] = getProviderPda(program.programId, providerWallet);
   const [configPda] = getConfigPda(program.programId);
+  const [vaultPda] = getVaultPda(program.programId, configPda);
+  const [buyerRecordPda] = getBuyerRecordPda(program.programId, providerWallet, buyerKeypair.publicKey);
 
   const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
     publicKey: providerWallet.toBytes(),
@@ -113,15 +129,20 @@ export async function openDisputeWithReceipt(params: {
     .accounts({
       buyer: buyerKeypair.publicKey,
       provider: providerPda,
+      buyerRecord: buyerRecordPda,
       dispute: disputePda,
       config: configPda,
+      vault: vaultPda,
+      buyerTokenAccount,
       instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+      tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
     .instruction();
 
   const tx = new Transaction().add(ed25519Ix).add(openIx);
-  const txSig = await program.provider.sendAndConfirm(tx, [buyerKeypair]);
+  tx.feePayer = buyerKeypair.publicKey;
+  const txSig = await anchor.web3.sendAndConfirmTransaction(program.provider.connection, tx, [buyerKeypair]);
 
   return { txSig, disputePda, receiptHash };
 }
@@ -131,14 +152,25 @@ export async function resolveDisputeRuling(params: {
   arbiterKeypair: Keypair;
   disputePda: PublicKey;
   providerWallet: PublicKey;
+  buyerWallet: PublicKey;
   buyerTokenAccount: PublicKey;
   ruling: "BuyerWins" | "ProviderWins";
   rulingHash?: Buffer;
 }): Promise<string> {
-  const { program, arbiterKeypair, disputePda, providerWallet, buyerTokenAccount, ruling, rulingHash } = params;
+  const {
+    program,
+    arbiterKeypair,
+    disputePda,
+    providerWallet,
+    buyerWallet,
+    buyerTokenAccount,
+    ruling,
+    rulingHash,
+  } = params;
   const [providerPda] = getProviderPda(program.programId, providerWallet);
   const [configPda] = getConfigPda(program.programId);
   const [vaultPda] = getVaultPda(program.programId, configPda);
+  const [buyerRecordPda] = getBuyerRecordPda(program.programId, providerWallet, buyerWallet);
 
   const anchorRuling = ruling === "BuyerWins" ? { buyerWins: {} } : { providerWins: {} };
   const rHash = rulingHash ? Array.from(rulingHash) : Array.from(Buffer.alloc(32, 0));
@@ -150,10 +182,48 @@ export async function resolveDisputeRuling(params: {
       config: configPda,
       dispute: disputePda,
       provider: providerPda,
+      buyerRecord: buyerRecordPda,
       vault: vaultPda,
       buyerTokenAccount,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
     .signers([arbiterKeypair])
+    .rpc();
+}
+
+export async function claimTimeoutSettlement(params: {
+  program: any;
+  callerKeypair: Keypair;
+  disputePda: PublicKey;
+  providerWallet: PublicKey;
+  buyerWallet: PublicKey;
+  buyerTokenAccount: PublicKey;
+}): Promise<string> {
+  const {
+    program,
+    callerKeypair,
+    disputePda,
+    providerWallet,
+    buyerWallet,
+    buyerTokenAccount,
+  } = params;
+  const [providerPda] = getProviderPda(program.programId, providerWallet);
+  const [configPda] = getConfigPda(program.programId);
+  const [vaultPda] = getVaultPda(program.programId, configPda);
+  const [buyerRecordPda] = getBuyerRecordPda(program.programId, providerWallet, buyerWallet);
+
+  return await program.methods
+    .claimTimeout()
+    .accounts({
+      caller: callerKeypair.publicKey,
+      config: configPda,
+      dispute: disputePda,
+      provider: providerPda,
+      buyerRecord: buyerRecordPda,
+      vault: vaultPda,
+      buyerTokenAccount,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .signers([callerKeypair])
     .rpc();
 }

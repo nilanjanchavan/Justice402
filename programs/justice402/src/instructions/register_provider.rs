@@ -52,6 +52,7 @@ pub fn handle_register_provider(
     provider.open_disputes = 0;
     provider.disputes_buyer_won = 0;
     provider.disputes_provider_won = 0;
+    provider.disputes_timed_out = 0;
     provider.total_slashed = 0;
     provider.bump = ctx.bumps.provider;
 

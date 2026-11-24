@@ -9,7 +9,8 @@
   "scripts": {
     "test": "npx mocha -r ts-node/register -t 60000 tests/receipt.spec.ts",
     "test:integration": "npx mocha -r ts-node/register -t 60000 tests/justice402.ts",
-    "test:e2e": "npx mocha -r ts-node/register -t 60000 tests/e2e.spec.ts"
+    "test:e2e": "npx mocha -r ts-node/register -t 60000 tests/e2e.spec.ts",
+    "x402:devnet": "npx ts-node scripts/x402-devnet.ts"
   },
   "devDependencies": {
     "@anchor-lang/core": "^1.2.2",

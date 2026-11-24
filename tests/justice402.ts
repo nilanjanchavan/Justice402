@@ -97,6 +97,8 @@ describe("justice402 program test suite", () => {
   const RESOLVE_TIMEOUT = new BN(3); // 3 seconds
   const WITHDRAW_DELAY = new BN(3);  // 3 seconds
   const PAYOUT_CAP = new BN(50_000_000); // 50 USDC cap (6 decimals)
+  const DISPUTE_DEPOSIT = new BN(1_000_000); // 1 USDC deposit
+  const MAX_OPEN_DISPUTES = 3;
 
   const INITIAL_BOND = new BN(100_000_000); // 100 USDC
   const TOP_UP_BOND = new BN(50_000_000);   // 50 USDC
@@ -133,6 +135,18 @@ describe("justice402 program test suite", () => {
       timestamp: new BN(opts.timestamp !== undefined ? opts.timestamp : Math.floor(Date.now() / 1000)),
       nonce: new BN(opts.nonce !== undefined ? opts.nonce : 1),
     };
+  }
+
+  async function sendTx(tx: Transaction, signers: Keypair[]): Promise<string> {
+    tx.feePayer = signers[0].publicKey;
+    return await anchor.web3.sendAndConfirmTransaction(provider.connection, tx, signers);
+  }
+
+  function getBuyerRecordPda(buyerKey: PublicKey, providerKey: PublicKey = providerWallet.publicKey): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("buyer_record"), providerKey.toBuffer(), buyerKey.toBuffer()],
+      program.programId
+    )[0];
   }
 
   const ARBITER_SEED = crypto.createHash("sha256").update("justice402-shared-test-arbiter").digest().subarray(0, 32);
@@ -176,6 +190,8 @@ describe("justice402 program test suite", () => {
 
     // Fund provider with 500 USDC
     await mintTo(provider.connection, admin, usdcMint, providerTokenAccount, admin, 500_000_000);
+    await mintTo(provider.connection, admin, usdcMint, buyerTokenAccount, admin, 100_000_000);
+    await mintTo(provider.connection, admin, usdcMint, attackerTokenAccount, admin, 100_000_000);
   });
 
   it("1. Initializes program config and vault PDA", async () => {
@@ -185,7 +201,9 @@ describe("justice402 program test suite", () => {
         DISPUTE_WINDOW,
         RESOLVE_TIMEOUT,
         WITHDRAW_DELAY,
-        PAYOUT_CAP
+        PAYOUT_CAP,
+        DISPUTE_DEPOSIT,
+        MAX_OPEN_DISPUTES
       )
       .accounts({
         admin: admin.publicKey,
@@ -291,15 +309,19 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(openIx);
-    await provider.sendAndConfirm(tx, [buyerWallet]);
+    await sendTx(tx, [buyerWallet]);
 
     const disputeAccount: any = await program.account.dispute.fetch(disputePda);
     expect(disputeAccount.buyer.toBase58()).to.equal(buyerWallet.publicKey.toBase58());
@@ -332,9 +354,13 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -342,7 +368,7 @@ describe("justice402 program test suite", () => {
     const tx = new Transaction().add(ed25519Ix).add(openIx);
     let capturedErr: any = null;
     try {
-      await provider.sendAndConfirm(tx, [buyerWallet]);
+      await sendTx(tx, [buyerWallet]);
     } catch (err: any) {
       capturedErr = err;
     }
@@ -367,9 +393,13 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -377,7 +407,7 @@ describe("justice402 program test suite", () => {
     const tx = new Transaction().add(ed25519Ix).add(openIx);
     let capturedErr: any = null;
     try {
-      await provider.sendAndConfirm(tx, [buyerWallet]);
+      await sendTx(tx, [buyerWallet]);
     } catch (err: any) {
       capturedErr = err;
     }
@@ -406,9 +436,13 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -416,7 +450,7 @@ describe("justice402 program test suite", () => {
     const tx = new Transaction().add(ed25519Ix).add(openIx);
     let capturedErr: any = null;
     try {
-      await provider.sendAndConfirm(tx, [buyerWallet]);
+      await sendTx(tx, [buyerWallet]);
     } catch (err: any) {
       capturedErr = err;
     }
@@ -443,9 +477,13 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -453,7 +491,7 @@ describe("justice402 program test suite", () => {
     const tx = new Transaction().add(ed25519Ix).add(openIx);
     let capturedErr: any = null;
     try {
-      await provider.sendAndConfirm(tx, [buyerWallet]);
+      await sendTx(tx, [buyerWallet]);
     } catch (err: any) {
       capturedErr = err;
     }
@@ -482,9 +520,13 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -492,7 +534,7 @@ describe("justice402 program test suite", () => {
     const tx = new Transaction().add(ed25519Ix).add(openIx);
     let capturedErr: any = null;
     try {
-      await provider.sendAndConfirm(tx, [buyerWallet]);
+      await sendTx(tx, [buyerWallet]);
     } catch (err: any) {
       capturedErr = err;
     }
@@ -513,9 +555,13 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -523,7 +569,7 @@ describe("justice402 program test suite", () => {
     const tx = new Transaction().add(openIx);
     let capturedErr: any = null;
     try {
-      await provider.sendAndConfirm(tx, [buyerWallet]);
+      await sendTx(tx, [buyerWallet]);
     } catch (err: any) {
       capturedErr = err;
     }
@@ -559,9 +605,13 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -569,7 +619,7 @@ describe("justice402 program test suite", () => {
     const tx = new Transaction().add(tamperedEd25519Ix).add(openIx);
     let capturedErr: any = null;
     try {
-      await provider.sendAndConfirm(tx, [buyerWallet]);
+      await sendTx(tx, [buyerWallet]);
     } catch (err: any) {
       capturedErr = err;
     }
@@ -597,9 +647,13 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -607,7 +661,7 @@ describe("justice402 program test suite", () => {
     const tx = new Transaction().add(ed25519Ix).add(openIx);
     let capturedErr: any = null;
     try {
-      await provider.sendAndConfirm(tx, [buyerWallet]);
+      await sendTx(tx, [buyerWallet]);
     } catch (err: any) {
       capturedErr = err;
     }
@@ -635,9 +689,13 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -645,7 +703,7 @@ describe("justice402 program test suite", () => {
     const tx = new Transaction().add(ed25519Ix).add(openIx);
     let capturedErr: any = null;
     try {
-      await provider.sendAndConfirm(tx, [buyerWallet]);
+      await sendTx(tx, [buyerWallet]);
     } catch (err: any) {
       capturedErr = err;
     }
@@ -671,9 +729,13 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: attackerWallet.publicKey, // ATTACKER CALLER!
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(attackerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount: attackerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -681,7 +743,7 @@ describe("justice402 program test suite", () => {
     const tx = new Transaction().add(ed25519Ix).add(openIx);
     let capturedErr: any = null;
     try {
-      await provider.sendAndConfirm(tx, [attackerWallet]);
+      await sendTx(tx, [attackerWallet]);
     } catch (err: any) {
       capturedErr = err;
     }
@@ -713,15 +775,19 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(openIx);
-    await provider.sendAndConfirm(tx, [buyerWallet]);
+    await sendTx(tx, [buyerWallet]);
 
     const disputeAccount: any = await program.account.dispute.fetch(disputePda);
     expect(disputeAccount.price.toString()).to.equal("90000000");
@@ -746,6 +812,7 @@ describe("justice402 program test suite", () => {
         config: configPda,
         dispute: disputePda,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         vault: vaultPda,
         buyerTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -758,8 +825,8 @@ describe("justice402 program test suite", () => {
 
     const buyerTokenAfter = await getAccount(provider.connection, buyerTokenAccount);
     const diff = new BN(buyerTokenAfter.amount.toString()).sub(new BN(buyerTokenBefore.amount.toString()));
-    // Buyer receives exactly the capped 50 USDC
-    expect(diff.toString()).to.equal(PAYOUT_CAP.toString());
+    // Buyer receives capped 50 USDC + returned 1 USDC deposit
+    expect(diff.toString()).to.equal(PAYOUT_CAP.add(DISPUTE_DEPOSIT).toString());
 
     const providerAccountAfter: any = await program.account.provider.fetch(providerPda);
     const expectedBond = new BN(providerAccountBefore.bond.toString()).sub(PAYOUT_CAP);
@@ -786,6 +853,7 @@ describe("justice402 program test suite", () => {
           config: configPda,
           dispute: disputePda,
           provider: providerPda,
+          buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
           vault: vaultPda,
           buyerTokenAccount,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -813,6 +881,7 @@ describe("justice402 program test suite", () => {
           config: configPda,
           dispute: disputePda,
           provider: providerPda,
+          buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
           vault: vaultPda,
           buyerTokenAccount,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -845,14 +914,18 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
 
-    await provider.sendAndConfirm(new Transaction().add(ed25519Ix).add(openIx), [buyerWallet]);
+    await sendTx(new Transaction().add(ed25519Ix).add(openIx), [buyerWallet]);
 
     const buyerTokenBefore = await getAccount(provider.connection, buyerTokenAccount);
     const providerAccountBefore: any = await program.account.provider.fetch(providerPda);
@@ -865,6 +938,7 @@ describe("justice402 program test suite", () => {
         config: configPda,
         dispute: disputePda,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         vault: vaultPda,
         buyerTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -879,9 +953,10 @@ describe("justice402 program test suite", () => {
     const buyerTokenAfter = await getAccount(provider.connection, buyerTokenAccount);
     expect(buyerTokenAfter.amount.toString()).to.equal(buyerTokenBefore.amount.toString());
 
-    // Provider bond untouched, locked decreased by 20 USDC
+    // Provider bond credited with forfeited dispute deposit, locked decreased by 20 USDC
     const providerAccountAfter: any = await program.account.provider.fetch(providerPda);
-    expect(providerAccountAfter.bond.toString()).to.equal(providerAccountBefore.bond.toString());
+    const expectedBond = new BN(providerAccountBefore.bond.toString()).add(DISPUTE_DEPOSIT);
+    expect(providerAccountAfter.bond.toString()).to.equal(expectedBond.toString());
     const expectedLocked = new BN(providerAccountBefore.locked.toString()).sub(new BN(20_000_000));
     expect(providerAccountAfter.locked.toString()).to.equal(expectedLocked.toString());
 
@@ -909,15 +984,19 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(openIx);
-    await provider.sendAndConfirm(tx, [buyerWallet]);
+    await sendTx(tx, [buyerWallet]);
 
     const disputeAccountBefore: any = await program.account.dispute.fetch(disputePda);
     const deadline = Number(disputeAccountBefore.openedAt.toString()) + Number(RESOLVE_TIMEOUT.toString());
@@ -928,10 +1007,11 @@ describe("justice402 program test suite", () => {
       await program.methods
         .claimTimeout()
         .accounts({
-          buyer: buyerWallet.publicKey,
+          caller: buyerWallet.publicKey,
           config: configPda,
           dispute: disputePda,
           provider: providerPda,
+          buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
           vault: vaultPda,
           buyerTokenAccount,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -957,6 +1037,7 @@ describe("justice402 program test suite", () => {
           config: configPda,
           dispute: disputePda,
           provider: providerPda,
+          buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
           vault: vaultPda,
           buyerTokenAccount,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -976,10 +1057,11 @@ describe("justice402 program test suite", () => {
     await program.methods
       .claimTimeout()
       .accounts({
-        buyer: buyerWallet.publicKey,
+        caller: buyerWallet.publicKey,
         config: configPda,
         dispute: disputePda,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         vault: vaultPda,
         buyerTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -992,14 +1074,174 @@ describe("justice402 program test suite", () => {
 
     const buyerTokenAfter = await getAccount(provider.connection, buyerTokenAccount);
     const diff = new BN(buyerTokenAfter.amount.toString()).sub(new BN(buyerTokenBefore.amount.toString()));
-    expect(diff.toString()).to.equal("15000000");
+    // Price refund (15 USDC) + returned deposit (1 USDC)
+    expect(diff.toString()).to.equal(new BN(15_000_000).add(DISPUTE_DEPOSIT).toString());
 
     const providerAccountAfter: any = await program.account.provider.fetch(providerPda);
-    // Timeout refund counts as a loss (buyer won refund)
-    const expectedBuyerWon = new BN(providerAccountBefore.disputesBuyerWon.toString()).add(new BN(1));
-    expect(providerAccountAfter.disputesBuyerWon.toString()).to.equal(expectedBuyerWon.toString());
-    const expectedSlashed = new BN(providerAccountBefore.totalSlashed.toString()).add(new BN(15_000_000));
-    expect(providerAccountAfter.totalSlashed.toString()).to.equal(expectedSlashed.toString());
+    // Timeout refund increments disputes_timed_out; does NOT increment disputes_buyer_won or total_slashed
+    expect(providerAccountAfter.disputesTimedOut.toString()).to.equal("1");
+    expect(providerAccountAfter.disputesBuyerWon.toString()).to.equal(providerAccountBefore.disputesBuyerWon.toString());
+    expect(providerAccountAfter.totalSlashed.toString()).to.equal(providerAccountBefore.totalSlashed.toString());
+  });
+
+  it("17b. Permissionless timeout refund: independent caller triggers settlement, buyer receives refund", async () => {
+    // Open dispute 302 for 10 USDC
+    const receipt = createTestReceipt({ nonce: 302, price: new BN(10_000_000) });
+    const canonicalBytes = encodeReceipt(receipt);
+    const receiptHash = hashReceipt(canonicalBytes);
+    const [disputePda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), receiptHash], program.programId);
+
+    const sig = signEd25519(canonicalBytes, providerWallet.secretKey);
+    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+      publicKey: providerWallet.publicKey.toBytes(),
+      message: canonicalBytes,
+      signature: sig,
+    });
+
+    const openIx = await program.methods
+      .openDispute(toAnchorReceipt(receipt), Array.from(Buffer.alloc(32, 32)))
+      .accounts({
+        buyer: buyerWallet.publicKey,
+        provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
+        dispute: disputePda,
+        config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
+        instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    await sendTx(new Transaction().add(ed25519Ix).add(openIx), [buyerWallet]);
+
+    const disputeAccountBefore: any = await program.account.dispute.fetch(disputePda);
+    const deadline = Number(disputeAccountBefore.openedAt.toString()) + Number(RESOLVE_TIMEOUT.toString());
+    await waitForTimestamp(deadline);
+
+    const buyerTokenBefore = await getAccount(provider.connection, buyerTokenAccount);
+    const attackerTokenBefore = await getAccount(provider.connection, attackerTokenAccount);
+
+    // Permissionless caller: ATTACKER / UNRELATED CALLER triggers settlement!
+    await program.methods
+      .claimTimeout()
+      .accounts({
+        caller: attackerWallet.publicKey,
+        config: configPda,
+        dispute: disputePda,
+        provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
+        vault: vaultPda,
+        buyerTokenAccount, // strictly bound to dispute.buyer
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([attackerWallet])
+      .rpc();
+
+    const disputeAccountAfter: any = await program.account.dispute.fetch(disputePda);
+    expect(disputeAccountAfter.status.timedOut).to.not.be.undefined;
+
+    // Buyer receives the 10 USDC claim + 1 USDC deposit
+    const buyerTokenAfter = await getAccount(provider.connection, buyerTokenAccount);
+    const diff = new BN(buyerTokenAfter.amount.toString()).sub(new BN(buyerTokenBefore.amount.toString()));
+    expect(diff.toString()).to.equal(new BN(10_000_000).add(DISPUTE_DEPOSIT).toString());
+
+    // Attacker received nothing
+    const attackerTokenAfter = await getAccount(provider.connection, attackerTokenAccount);
+    expect(attackerTokenAfter.amount.toString()).to.equal(attackerTokenBefore.amount.toString());
+  });
+
+  it("17c. Enforces open dispute cap per buyer per provider (max 3)", async () => {
+    // Current open disputes for buyerWallet: let us check
+    const buyerRecordBefore: any = await program.account.buyerRecord.fetchNullable(getBuyerRecordPda(buyerWallet.publicKey));
+    const currentOpen = buyerRecordBefore ? buyerRecordBefore.openDisputes : 0;
+
+    // Open disputes until cap of 3 is reached
+    const addedReceipts = [];
+    for (let i = currentOpen; i < MAX_OPEN_DISPUTES; i++) {
+      const r = createTestReceipt({ nonce: 900 + i, price: new BN(1_000_000) });
+      const cBytes = encodeReceipt(r);
+      const rHash = hashReceipt(cBytes);
+      const [dPda] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), rHash], program.programId);
+      const sig = signEd25519(cBytes, providerWallet.secretKey);
+      const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+        publicKey: providerWallet.publicKey.toBytes(),
+        message: cBytes,
+        signature: sig,
+      });
+      const openIx = await program.methods
+        .openDispute(toAnchorReceipt(r), Array.from(Buffer.alloc(32, 90 + i)))
+        .accounts({
+          buyer: buyerWallet.publicKey,
+          provider: providerPda,
+          buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
+          dispute: dPda,
+          config: configPda,
+          vault: vaultPda,
+          buyerTokenAccount,
+          instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .instruction();
+      await sendTx(new Transaction().add(ed25519Ix).add(openIx), [buyerWallet]);
+      addedReceipts.push({ r, dPda });
+    }
+
+    // Now buyer has exactly 3 open disputes. Opening the 4th dispute MUST fail with TooManyOpenDisputes!
+    const exceedingReceipt = createTestReceipt({ nonce: 999, price: new BN(1_000_000) });
+    const cBytes = encodeReceipt(exceedingReceipt);
+    const rHash = hashReceipt(cBytes);
+    const [dPdaExceeding] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), rHash], program.programId);
+    const sigExceeding = signEd25519(cBytes, providerWallet.secretKey);
+    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+      publicKey: providerWallet.publicKey.toBytes(),
+      message: cBytes,
+      signature: sigExceeding,
+    });
+    const openIx = await program.methods
+      .openDispute(toAnchorReceipt(exceedingReceipt), Array.from(Buffer.alloc(32, 99)))
+      .accounts({
+        buyer: buyerWallet.publicKey,
+        provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
+        dispute: dPdaExceeding,
+        config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
+        instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    let capErr: any = null;
+    try {
+      await sendTx(new Transaction().add(ed25519Ix).add(openIx), [buyerWallet]);
+    } catch (err: any) {
+      capErr = err;
+    }
+    expect(capErr, "Opening dispute beyond cap must fail").to.not.be.null;
+    expect(getErrorMessage(capErr)).to.include("TooManyOpenDisputes");
+
+    // Clear the added disputes so subsequent tests have room
+    for (const item of addedReceipts) {
+      await program.methods
+        .resolveDispute({ providerWins: {} }, Array.from(Buffer.alloc(32, 0)))
+        .accounts({
+          arbiter: arbiter.publicKey,
+          config: configPda,
+          dispute: item.dPda,
+          provider: providerPda,
+          buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
+          vault: vaultPda,
+          buyerTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([arbiter])
+        .rpc();
+    }
   });
 
   it("18. Withdraw restrictions: blocked while funds are locked in active disputes", async () => {
@@ -1021,14 +1263,18 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
 
-    await provider.sendAndConfirm(new Transaction().add(ed25519Ix).add(openIx), [buyerWallet]);
+    await sendTx(new Transaction().add(ed25519Ix).add(openIx), [buyerWallet]);
 
     // Provider has locked funds: request_withdraw should fail
     let reqErr: any = null;
@@ -1076,6 +1322,7 @@ describe("justice402 program test suite", () => {
         config: configPda,
         dispute: disputePda,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         vault: vaultPda,
         buyerTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -1089,10 +1336,11 @@ describe("justice402 program test suite", () => {
     await program.methods
       .claimTimeout()
       .accounts({
-        buyer: buyerWallet.publicKey,
+        caller: buyerWallet.publicKey,
         config: configPda,
         dispute: dispute101Pda,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         vault: vaultPda,
         buyerTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -1124,14 +1372,18 @@ describe("justice402 program test suite", () => {
       .accounts({
         buyer: buyerWallet.publicKey,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         dispute: disputePda,
         config: configPda,
+        vault: vaultPda,
+        buyerTokenAccount,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
 
-    await provider.sendAndConfirm(new Transaction().add(ed25519Ix).add(openIx), [buyerWallet]);
+    await sendTx(new Transaction().add(ed25519Ix).add(openIx), [buyerWallet]);
 
     const providerWithOpenDispute: any = await program.account.provider.fetch(providerPda);
     expect(providerWithOpenDispute.locked.toString()).to.equal("0");
@@ -1176,10 +1428,11 @@ describe("justice402 program test suite", () => {
     await program.methods
       .claimTimeout()
       .accounts({
-        buyer: buyerWallet.publicKey,
+        caller: buyerWallet.publicKey,
         config: configPda,
         dispute: disputePda,
         provider: providerPda,
+        buyerRecord: getBuyerRecordPda(buyerWallet.publicKey),
         vault: vaultPda,
         buyerTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,

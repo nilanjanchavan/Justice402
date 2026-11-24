@@ -21,18 +21,20 @@ pub enum Ruling {
 #[account]
 #[derive(Default, Debug)]
 pub struct Config {
-    pub arbiter: Pubkey,              // 32
-    pub usdc_mint: Pubkey,            // 32
-    pub dispute_window: i64,          // 8 (seconds)
-    pub resolve_timeout: i64,         // 8 (seconds)
-    pub withdraw_delay: i64,          // 8 (seconds)
-    pub per_ruling_payout_cap: u64,   // 8
-    pub vault_bump: u8,               // 1
-    pub bump: u8,                     // 1
+    pub arbiter: Pubkey,                  // 32
+    pub usdc_mint: Pubkey,                // 32
+    pub dispute_window: i64,              // 8 (seconds)
+    pub resolve_timeout: i64,             // 8 (seconds)
+    pub withdraw_delay: i64,              // 8 (seconds)
+    pub per_ruling_payout_cap: u64,       // 8
+    pub dispute_deposit: u64,             // 8 (buyer deposit in token base units)
+    pub max_open_disputes_per_buyer: u32, // 4 (cap per buyer per provider)
+    pub vault_bump: u8,                   // 1
+    pub bump: u8,                         // 1
 }
 
 impl Config {
-    pub const LEN: usize = 8 + 32 + 32 + 8 + 8 + 8 + 8 + 1 + 1;
+    pub const LEN: usize = 8 + 32 + 32 + 8 + 8 + 8 + 8 + 8 + 4 + 1 + 1; // 118
 }
 
 #[account]
@@ -46,12 +48,24 @@ pub struct Provider {
     pub open_disputes: u64,           // 8
     pub disputes_buyer_won: u64,      // 8
     pub disputes_provider_won: u64,   // 8
+    pub disputes_timed_out: u64,      // 8
     pub total_slashed: u64,           // 8
     pub bump: u8,                     // 1
 }
 
 impl Provider {
-    pub const LEN: usize = 8 + 32 + 8 + 8 + 8 + 32 + 8 + 8 + 8 + 8 + 1; // 129
+    pub const LEN: usize = 8 + 32 + 8 + 8 + 8 + 32 + 8 + 8 + 8 + 8 + 8 + 1; // 137
+}
+
+#[account]
+#[derive(Default, Debug)]
+pub struct BuyerRecord {
+    pub open_disputes: u32,           // 4
+    pub bump: u8,                     // 1
+}
+
+impl BuyerRecord {
+    pub const LEN: usize = 8 + 4 + 1; // 13
 }
 
 #[account]
@@ -63,6 +77,7 @@ pub struct Dispute {
     pub spec_hash: [u8; 32],          // 32
     pub price: u64,                   // 8
     pub claim_amount: u64,            // 8
+    pub deposit_amount: u64,          // 8
     pub status: DisputeStatus,        // 1
     pub opened_at: i64,               // 8
     pub evidence_hash: [u8; 32],      // 32
@@ -71,7 +86,7 @@ pub struct Dispute {
 }
 
 impl Dispute {
-    pub const LEN: usize = 8 + 32 + 32 + 32 + 32 + 8 + 8 + 1 + 8 + 32 + 32 + 1; // 234
+    pub const LEN: usize = 8 + 32 + 32 + 32 + 32 + 8 + 8 + 8 + 1 + 8 + 32 + 32 + 1; // 242
 }
 
 impl Default for DisputeStatus {

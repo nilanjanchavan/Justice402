@@ -1,7 +1,12 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Mint, Token, TokenAccount};
+use anchor_spl::token::{Token, TokenAccount};
 use crate::state::Config;
 use crate::errors::JusticeError;
+
+pub const MAX_DISPUTE_WINDOW: i64 = 365 * 24 * 60 * 60; // 1 year max
+pub const MAX_RESOLVE_TIMEOUT: i64 = 30 * 24 * 60 * 60;  // 30 days max
+pub const MAX_WITHDRAW_DELAY: i64 = 365 * 24 * 60 * 60;  // 1 year max
+pub const MAX_OPEN_DISPUTES_CAP: u32 = 100;
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
@@ -17,7 +22,8 @@ pub struct Initialize<'info> {
     )]
     pub config: Account<'info, Config>,
 
-    pub usdc_mint: Account<'info, Mint>,
+    /// CHECK: USDC SPL mint address
+    pub usdc_mint: UncheckedAccount<'info>,
 
     #[account(
         init,
@@ -29,13 +35,10 @@ pub struct Initialize<'info> {
     )]
     pub vault: Account<'info, TokenAccount>,
 
-    pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
 }
-
-pub const MAX_DISPUTE_WINDOW: i64 = 365 * 24 * 3600; // 1 year
-pub const MAX_RESOLVE_TIMEOUT: i64 = 30 * 24 * 3600; // 30 days
-pub const MAX_WITHDRAW_DELAY: i64 = 365 * 24 * 3600;  // 1 year
 
 pub fn handle_initialize(
     ctx: Context<Initialize>,
@@ -44,11 +47,14 @@ pub fn handle_initialize(
     resolve_timeout: i64,
     withdraw_delay: i64,
     per_ruling_payout_cap: u64,
+    dispute_deposit: u64,
+    max_open_disputes_per_buyer: u32,
 ) -> Result<()> {
     require!(dispute_window > 0 && dispute_window <= MAX_DISPUTE_WINDOW, JusticeError::InvalidConfig);
     require!(resolve_timeout > 0 && resolve_timeout <= MAX_RESOLVE_TIMEOUT, JusticeError::InvalidConfig);
-    require!(withdraw_delay > 0 && withdraw_delay <= MAX_WITHDRAW_DELAY, JusticeError::InvalidConfig);
+    require!(withdraw_delay >= 0 && withdraw_delay <= MAX_WITHDRAW_DELAY, JusticeError::InvalidConfig);
     require!(per_ruling_payout_cap > 0, JusticeError::InvalidConfig);
+    require!(max_open_disputes_per_buyer > 0 && max_open_disputes_per_buyer <= MAX_OPEN_DISPUTES_CAP, JusticeError::InvalidConfig);
 
     let config = &mut ctx.accounts.config;
     config.arbiter = arbiter;
@@ -57,9 +63,10 @@ pub fn handle_initialize(
     config.resolve_timeout = resolve_timeout;
     config.withdraw_delay = withdraw_delay;
     config.per_ruling_payout_cap = per_ruling_payout_cap;
+    config.dispute_deposit = dispute_deposit;
+    config.max_open_disputes_per_buyer = max_open_disputes_per_buyer;
     config.vault_bump = ctx.bumps.vault;
     config.bump = ctx.bumps.config;
 
     Ok(())
 }
-

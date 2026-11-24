@@ -23,6 +23,8 @@ pub mod justice402 {
         resolve_timeout: i64,
         withdraw_delay: i64,
         per_ruling_payout_cap: u64,
+        dispute_deposit: u64,
+        max_open_disputes_per_buyer: u32,
     ) -> Result<()> {
         handle_initialize(
             ctx,
@@ -31,6 +33,8 @@ pub mod justice402 {
             resolve_timeout,
             withdraw_delay,
             per_ruling_payout_cap,
+            dispute_deposit,
+            max_open_disputes_per_buyer,
         )
     }
 
