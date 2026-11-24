@@ -20,4 +20,4 @@ wallet = "./id.json"
 startup_wait = 10000
 
 [scripts]
-test = "npm run test && npm run test:integration"
+test = "npm run test && npm run test:integration && npm run test:e2e"

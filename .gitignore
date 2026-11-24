@@ -13,6 +13,7 @@ provider.json
 arbiter.json
 .DS_Store
 dist/
+**/dist/
 build/
 .system_generated/
 

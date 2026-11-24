@@ -135,9 +135,11 @@ describe("justice402 program test suite", () => {
     };
   }
 
+  const ARBITER_SEED = crypto.createHash("sha256").update("justice402-shared-test-arbiter").digest().subarray(0, 32);
+
   before(async () => {
     admin = (provider.wallet as any).payer;
-    arbiter = Keypair.generate();
+    arbiter = Keypair.fromSeed(ARBITER_SEED);
     providerWallet = Keypair.generate();
     buyerWallet = Keypair.generate();
     attackerWallet = Keypair.generate();

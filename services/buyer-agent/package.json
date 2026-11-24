@@ -1,0 +1,17 @@
+{
+  "name": "@justice402/buyer-agent",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@justice402/anchor-client": "^0.1.0",
+    "@justice402/x402-svm": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  }
+}
+
