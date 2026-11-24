@@ -7,6 +7,7 @@ pub const MAX_DISPUTE_WINDOW: i64 = 365 * 24 * 60 * 60; // 1 year max
 pub const MAX_RESOLVE_TIMEOUT: i64 = 30 * 24 * 60 * 60;  // 30 days max
 pub const MAX_WITHDRAW_DELAY: i64 = 365 * 24 * 60 * 60;  // 1 year max
 pub const MAX_OPEN_DISPUTES_CAP: u32 = 100;
+pub const MAX_DISPUTE_DEPOSIT: u64 = 1_000_000_000; // 1000 USDC max deposit (6 decimals)
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
@@ -50,10 +51,12 @@ pub fn handle_initialize(
     dispute_deposit: u64,
     max_open_disputes_per_buyer: u32,
 ) -> Result<()> {
+    require!(arbiter != Pubkey::default(), JusticeError::InvalidConfig);
     require!(dispute_window > 0 && dispute_window <= MAX_DISPUTE_WINDOW, JusticeError::InvalidConfig);
     require!(resolve_timeout > 0 && resolve_timeout <= MAX_RESOLVE_TIMEOUT, JusticeError::InvalidConfig);
     require!(withdraw_delay >= 0 && withdraw_delay <= MAX_WITHDRAW_DELAY, JusticeError::InvalidConfig);
     require!(per_ruling_payout_cap > 0, JusticeError::InvalidConfig);
+    require!(dispute_deposit > 0 && dispute_deposit <= MAX_DISPUTE_DEPOSIT, JusticeError::InvalidConfig);
     require!(max_open_disputes_per_buyer > 0 && max_open_disputes_per_buyer <= MAX_OPEN_DISPUTES_CAP, JusticeError::InvalidConfig);
 
     let config = &mut ctx.accounts.config;

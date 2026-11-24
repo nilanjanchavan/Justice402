@@ -1,90 +1,121 @@
 # Justice402: Insurance for x402 Payments on Solana
 
-Justice402 is an on-chain insurance layer for HTTP [x402](https://x402.org) payment-required API services on Solana.
+> **30-Second Summary**: HTTP [x402](https://x402.org) APIs settle payments instantly and irreversibly. But what happens if an API returns corrupted data, hallucinations, out-of-spec numbers, or times out? **Justice402 provides on-chain insurance—not escrow.** Providers stake a bond on Solana and commit to an immutable service spec (`spec_hash`). Every HTTP response carries a provider-signed receipt. If an answer violates the spec, the buyer opens an on-chain dispute within a time window. An arbiter audits the cryptographic proof and refunds the buyer directly out of the provider's bond.
 
 ---
 
-## 1. Product Definition & Architecture
+## Live Deployments & Links
 
-**Justice402 is insurance for x402 payments, not escrow.**
+- **Live Dashboard**: [https://justice402-dashboard.vercel.app](https://justice402-dashboard.vercel.app) *(Placeholder)*
+- **Hosted Provider API**: [https://api.justice402.dev](https://api.justice402.dev) *(Placeholder)*
+- **Solana Devnet Program**: [`2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ`](https://explorer.solana.com/address/2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ?cluster=devnet)
+- **GitHub Repository**: [https://github.com/nilanjanchavan/Justice402](https://github.com/nilanjanchavan/Justice402)
+- **Live Demo Run Proof**: [`docs/DEMO_RUN.md`](docs/DEMO_RUN.md) & [`docs/demo-run.json`](docs/demo-run.json)
 
-Payments settle normally and instantly over x402 with no custom scheme, mediator, or custodial escrow holding buyer funds during the request. 
+---
 
-- **Instant Settlement**: Buyers pay providers directly via standard x402 V2 payment flows (using USDC or SPL tokens on Solana).
-- **Bonded Staking**: Providers stake an on-chain insurance bond in the Justice402 Solana program and commit to a verifiable service specification (`spec_hash`).
-- **Provider-Signed Receipts**: Every HTTP response carries an Ed25519 signature over a canonical, 249-byte serialized receipt linking the buyer, provider, query parameters, response hash, service spec hash, timestamp, and nonce.
-- **Dispute Window**: If a response violates the specification (corrupted data, out-of-bounds metrics, schema failure, or staleness), the buyer can open an on-chain dispute within a configurable window (e.g. 60 seconds).
-- **Arbiter Ruling & Slashed Bond**: When an arbiter rules in favor of the buyer, the buyer is refunded directly out of the provider's bonded stake, and the provider's on-chain track record is updated with slashed metrics.
-- **Arbiter Order**: A **HUMAN arbiter wallet** acts first as the deterministic authoritative judge. In Phase 3, an **AI arbiter** is introduced to automate evaluations, with the human arbiter retained as the trusted fallback.
+## Architecture Diagram
 
-### Trust Assumptions
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Buyer as Buyer Agent
+    participant Provider as Provider API
+    participant x402 as x402 SVM Facilitator
+    participant Program as Justice402 Anchor Program
+    actor Arbiter as Human Arbiter CLI
+
+    Note over Provider,Program: 1. Setup Phase
+    Provider->>Program: register_provider(bond, spec_hash)
+    Note over Provider,Program: Bond staked in Vault PDA, spec_hash committed
+
+    Note over Buyer,Provider: 2. Instant Payment & Service
+    Buyer->>Program: checkProviderTrust(provider)
+    Buyer->>Provider: GET /weather (x402 Challenge 402)
+    Buyer->>x402: Pay query price via ExactSvmScheme
+    x402-->>Provider: Payment Verified
+    Provider-->>Buyer: Response Data + Provider-Signed Receipt Header
+
+    Note over Buyer,Program: 3. Dispute Opening (If Spec Violated)
+    Buyer->>Buyer: Sanity check against spec (schema, ranges, freshness)
+    Note right of Buyer: Violation detected!
+    Buyer->>Program: open_dispute(receipt, evidence_hash) + Ed25519 Ix + Deposit
+    Note over Program: Locks claim_amount from Provider Bond, increments open_disputes
+
+    Note over Arbiter,Program: 4. Audit & Settlement
+    Arbiter->>Program: Fetch Dispute & Provider spec_hash
+    Arbiter->>Provider: GET /spec & verify sha256(spec) == spec_hash
+    Arbiter->>Arbiter: Deterministic verification & manual confirmation
+    Arbiter->>Program: resolve_dispute(BuyerWins, ruling_hash)
+    Program->>Buyer: Transfer refund (claim_amount + deposit) from Vault
+    Note over Program: Provider bond slashed, disputes_buyer_won +1
+```
+
+---
+
+## Core Product Mechanics
+
+1. **Insurance, Not Escrow**:
+   Funds are never locked in escrow during the HTTP request. Instant payment is preserved.
+2. **Provider Stake Bond**:
+   Providers deposit collateral in USDC. A buyer spend policy refuses to purchase from unbonded or high-loss providers.
+3. **Canonical 249-Byte Signed Receipt**:
+   Cryptographically commits to provider, buyer, spec_hash, request_hash, response_hash, payment_reference, price, timestamp, and nonce.
+4. **Ed25519 Instruction Introspection**:
+   The Solana program introspects the transaction's instruction sysvar to verify the provider's signature on-chain with zero third-party trust.
+5. **Human Arbiter First**:
+   Deterministic verification CLI displays full audits and prompts the human judge. An AI arbiter advisor is future work.
+6. **Anti-Griefing Protection**:
+   Buyers post a `dispute_deposit` (1 USDC) returned on win/timeout, forfeited on provider win. Open disputes are capped at 3 per buyer.
+7. **Permissionless Timeout**:
+   If the arbiter fails to respond before the deadline, any caller can trigger `claim_timeout` to refund the buyer.
+
+---
+
+## Trust Assumptions & Known Limitations
+
 > [!IMPORTANT]
-> - **The Arbiter is a Trusted Party**: The arbiter has authority to resolve disputes (`BuyerWins` or `ProviderWins`).
-> - **Arbiter Liveness is a Trust Assumption**: If the arbiter becomes unresponsive, the dispute enters a timeout state. Once the timeout elapses, the buyer can claim a full refund permissionlessly via `claim_timeout`.
+> - **The Arbiter is a Trusted Party**: In this phase, the arbiter wallet has sole authority to rule `BuyerWins` or `ProviderWins`.
+> - **Arbiter Liveness is a Trust Assumption**: If the arbiter goes offline, disputes must wait for the resolution timeout (e.g. 3 minutes on devnet) before settling.
+> - **Clock Drift Tolerance**: Solana on-chain clock skew tolerance is bounded to 60 seconds.
+> - **Immutable Spec per Account**: A provider commits to one immutable `spec_hash`. Updating a spec requires deploying a new provider account.
 
 ---
 
-## 2. Timeout & Deposit Policy
+## Related Work & Prior Art
 
-To prevent denial-of-service and griefing attacks against bonded providers:
-
-1. **Dispute Deposit**:
-   - Buyers pay a small configurable dispute deposit (default: 1 USDC) upon calling `open_dispute`.
-   - **Buyer Wins**: The deposit is returned to the buyer along with the refund (`claim_amount + deposit_amount`).
-   - **Timeout**: The deposit is returned to the buyer along with the refund (`claim_amount + deposit_amount`).
-   - **Provider Wins**: The deposit is forfeited to the provider and added to `provider.bond`.
-
-2. **Timeout Counter & Policy**:
-   - `claim_timeout` refunds the buyer's query price and deposit without punitive damages or compensation.
-   - `claim_timeout` increments `disputes_timed_out`. It does **NOT** increment `disputes_buyer_won` or `total_slashed` on the provider's track record.
-
-3. **Open Dispute Cap**:
-   - Open disputes per buyer per provider are capped on-chain (configurable, default: 3) tracked in a `BuyerRecord` PDA (`[b"buyer_record", provider_wallet, buyer]`).
-   - Opening an active dispute beyond the cap is rejected with `TooManyOpenDisputes`.
-
-4. **Permissionless Settlement**:
-   - Anyone (buyer, provider, or third-party keeper/caller) can call `claim_timeout` after the deadline has elapsed. The caller does not need to be the buyer, but the payout destination is strictly constrained to the buyer's token account.
+- **x402r (Reputation & Escrow)**: Proposed escrow schemes for x402 that add settlement delays and custodial risk. Justice402 solves this via post-payment bonded insurance.
+- **ERC-4337 & Conditional Clawbacks**: Smart contract wallets with conditional clawbacks operate on account-abstraction layers. Justice402 operates natively on Solana using PDA vaults.
+- **IETF ADRP (Automated Dispute Resolution Protocol)**: Explores standardized schemas for evidence exchange. Justice402 adopts ADRP-style deterministic spec auditing.
+- **Chainlink DECO & Town Crier**: Oracle-based verification of TLS sessions. Justice402 uses direct provider-signed Ed25519 receipts, avoiding heavy zero-knowledge TLS proofs.
 
 ---
 
-## 3. Account Layout & Safe Upgrade Path
+## Documentation Directory
 
-The Justice402 Anchor program stores state in PDA accounts:
-- `Config`: Program parameters (arbiter, dispute window, timeout, payout cap, dispute deposit, max open disputes).
-- `Provider`: Provider stake bond, locked funds, `spec_hash`, and dispute track record counters (`open_disputes`, `disputes_buyer_won`, `disputes_provider_won`, `disputes_timed_out`, `total_slashed`).
-- `BuyerRecord`: Per-buyer-per-provider active dispute count (`open_disputes`).
-- `Dispute`: On-chain dispute state, claim amount, deposit amount, and ruling details.
-
-### Upgrade Path
-- For the MVP and hackathon deployment, changes to account layouts (such as adding `spec_hash`, counters, or `BuyerRecord` PDA) require redeployment to a fresh Program ID.
-- In a production mainnet upgrade, zero-copy versioned account discriminators or an explicit migration instruction invoking Solana's `realloc` account resizing CPI would be used to migrate existing account data in-place without breaking deserialization.
+- [**docs/DESIGN_DECISIONS.md**](docs/DESIGN_DECISIONS.md) — Comprehensive design choices, trade-offs, and alternatives considered.
+- [**docs/CODE_WALKTHROUGH.md**](docs/CODE_WALKTHROUGH.md) — Line-by-line audit of every instruction, account constraint, and test mapping.
+- [**docs/DEPLOY.md**](docs/DEPLOY.md) — Exact devnet deployment guide with verifiable Docker builds and `solana-verify`.
+- [**docs/DEMO_SCRIPT.md**](docs/DEMO_SCRIPT.md) — 2 to 3 minute live demo presentation talk track.
+- [**docs/QA.md**](docs/QA.md) — 20 questions and answers covering security, attack vectors, and future mainnet architecture.
+- [**docs/HOSTING.md**](docs/HOSTING.md) — Hosted Provider API production deployment and environment variables.
 
 ---
 
-## 4. Stack Architecture & `@solana/kit` Isolation
+## Quickstart (Devnet Demo)
 
-`@x402/svm@2.32.0` mandates `@solana/kit: >=8.0.0` as a peer dependency. `@solana/kit` v8 is the modular, web-standard Solana SDK. 
-
-Because `@x402/svm` requires `@solana/kit` v8 APIs, while Anchor 1.x / 1.2.x client tooling uses legacy `@solana/web3.js` v1 (`Keypair`, `PublicKey`, `Transaction`), having both SDKs in the same package leads to type conflicts. 
-
-Justice402 isolates `@x402/svm` inside `packages/x402-svm`. It communicates with the rest of the monorepo exclusively via standard JSON and primitive `Uint8Array` byte arrays, maintaining complete SDK isolation.
-
----
-
-## 5. Testing & Verification
-
-### Run Full Test Suite (Receipt, Program, and E2E)
 ```bash
-anchor test --validator legacy --skip-build
-```
+# 1. Install dependencies & build
+npm install
+npm run build --workspaces
 
-### Run Verifier Unit Tests
-```bash
-npx mocha -r ts-node/register tests/verifier.spec.ts
-```
+# 2. Run unit & integration test suites
+npm test                    # Canonical receipt test vectors
+npm run test:integration    # 26 Anchor program tests
+npm run test:e2e            # End-to-end integration tests
 
-### Real x402 Devnet Payment Test
-```bash
-npm run x402:devnet
+# 3. Devnet Initialization & Demo
+npm run init:devnet         # Idempotent devnet program initialization
+npm run seed:devnet         # Registers Honest, Lying, and Subtle providers
+npm run demo:devnet         # Runs real devnet purchase & dispute flow
 ```
-This script executes a real x402 V2 payment request against Solana devnet via `ExactSvmScheme` (`@x402/svm`). It prints HTTP status codes, challenges, and inspects the `PAYMENT-RESPONSE` settlement header.

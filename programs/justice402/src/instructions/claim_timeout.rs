@@ -86,17 +86,19 @@ pub fn handle_claim_timeout(ctx: Context<ClaimTimeout>) -> Result<()> {
         &[vault_bump],
     ]];
 
-    let cpi_accounts = Transfer {
-        from: ctx.accounts.vault.to_account_info(),
-        to: ctx.accounts.buyer_token_account.to_account_info(),
-        authority: ctx.accounts.vault.to_account_info(),
-    };
-    let cpi_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.key(),
-        cpi_accounts,
-        signer_seeds,
-    );
-    token::transfer(cpi_ctx, payout)?;
+    if payout > 0 {
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.vault.to_account_info(),
+            to: ctx.accounts.buyer_token_account.to_account_info(),
+            authority: ctx.accounts.vault.to_account_info(),
+        };
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.key(),
+            cpi_accounts,
+            signer_seeds,
+        );
+        token::transfer(cpi_ctx, payout)?;
+    }
 
     provider.bond = provider.bond
         .checked_sub(dispute.claim_amount)

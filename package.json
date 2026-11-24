@@ -8,9 +8,22 @@
   ],
   "scripts": {
     "test": "npx mocha -r ts-node/register -t 60000 tests/receipt.spec.ts",
+    "test:receipt": "npx mocha -r ts-node/register -t 60000 tests/receipt.spec.ts",
+    "test:verifier": "npx mocha -r ts-node/register -t 60000 tests/verifier.spec.ts",
+    "test:unit": "npx mocha -r ts-node/register -t 60000 tests/receipt.spec.ts tests/verifier.spec.ts",
     "test:integration": "npx mocha -r ts-node/register -t 60000 tests/justice402.ts",
     "test:e2e": "npx mocha -r ts-node/register -t 60000 tests/e2e.spec.ts",
-    "x402:devnet": "npx ts-node scripts/x402-devnet.ts"
+    "test:all": "npx mocha -r ts-node/register -t 60000 tests/receipt.spec.ts tests/verifier.spec.ts tests/justice402.ts tests/e2e.spec.ts",
+    "typecheck": "tsc --noEmit && (cd packages/x402-svm && tsc --noEmit)",
+    "build:packages": "npm run build --workspace=packages/anchor-client && npm run build --workspace=packages/x402-svm",
+    "x402:devnet": "npx ts-node scripts/x402-devnet.ts",
+    "init:devnet": "npx ts-node scripts/init-devnet.ts",
+    "seed:devnet": "npx ts-node scripts/seed-devnet.ts",
+    "demo:devnet": "npx ts-node scripts/demo-devnet.ts",
+    "arbiter": "npx ts-node services/arbiter/src/cli.ts",
+    "start:provider": "npx ts-node services/provider-api/src/start.ts",
+    "dashboard:dev": "npm run dev --prefix dashboard",
+    "dashboard:build": "npm run build --prefix dashboard"
   },
   "devDependencies": {
     "@anchor-lang/core": "^1.2.2",

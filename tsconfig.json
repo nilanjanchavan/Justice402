@@ -12,6 +12,7 @@
     "resolveJsonModule": true,
     "types": ["mocha", "chai", "node"]
   },
-  "include": ["tests/**/*.ts", "packages/**/*.ts"]
+  "include": ["tests/**/*.ts", "packages/anchor-client/src/**/*.ts"],
+  "exclude": ["node_modules", "packages/x402-svm"]
 }
 

@@ -269,6 +269,36 @@ describe("justice402 program test suite", () => {
     expect(trust.specHash.toString("hex")).to.equal(PROVIDER_SPEC_HASH.toString("hex"));
   });
 
+  it("2b. Rejects register_provider with all-zero spec_hash", async () => {
+    const freshWallet = Keypair.generate();
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(freshWallet.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL)
+    );
+    const freshTokenAcc = await createAccount(provider.connection, admin, usdcMint, freshWallet.publicKey);
+    const [freshProviderPda] = PublicKey.findProgramAddressSync([Buffer.from("provider"), freshWallet.publicKey.toBuffer()], program.programId);
+
+    let errCaptured: any = null;
+    try {
+      await program.methods
+        .registerProvider(new BN(0), Array.from(Buffer.alloc(32, 0)))
+        .accounts({
+          providerWallet: freshWallet.publicKey,
+          provider: freshProviderPda,
+          config: configPda,
+          vault: vaultPda,
+          providerTokenAccount: freshTokenAcc,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([freshWallet])
+        .rpc();
+    } catch (err: any) {
+      errCaptured = err;
+    }
+    expect(errCaptured, "All-zero spec_hash must be rejected").to.not.be.null;
+    expect(getErrorMessage(errCaptured)).to.include("InvalidConfig");
+  });
+
   it("3. Tops up provider bond and resets pending withdrawal", async () => {
     await program.methods
       .topUp(TOP_UP_BOND)
@@ -1389,42 +1419,29 @@ describe("justice402 program test suite", () => {
     expect(providerWithOpenDispute.locked.toString()).to.equal("0");
     expect(providerWithOpenDispute.openDisputes.toString()).to.equal("1");
 
-    // Request withdraw succeeds because locked == 0
-    await program.methods
-      .requestWithdraw()
-      .accounts({
-        providerWallet: providerWallet.publicKey,
-        provider: providerPda,
-      })
-      .signers([providerWallet])
-      .rpc();
-
-    const providerRequested: any = await program.account.provider.fetch(providerPda);
-    const unlockTime = Number(providerRequested.withdrawRequestedAt.toString()) + Number(WITHDRAW_DELAY.toString());
-    await waitForTimestamp(unlockTime);
-
-    // withdrawBond should fail with ActiveDisputesPending because openDisputes == 1
-    let withdrawErr: any = null;
+    // Request withdraw is rejected with ActiveDisputesPending because openDisputes == 1
+    let reqErr: any = null;
     try {
       await program.methods
-        .withdrawBond(new BN(5_000_000))
+        .requestWithdraw()
         .accounts({
           providerWallet: providerWallet.publicKey,
           provider: providerPda,
-          config: configPda,
-          vault: vaultPda,
-          providerTokenAccount,
-          tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([providerWallet])
         .rpc();
     } catch (err: any) {
-      withdrawErr = err;
+      reqErr = err;
     }
-    expect(withdrawErr, "Withdraw should fail when open_disputes > 0").to.not.be.null;
-    expect(getErrorMessage(withdrawErr)).to.include("ActiveDisputesPending");
+    expect(reqErr, "requestWithdraw must fail when open_disputes > 0").to.not.be.null;
+    expect(getErrorMessage(reqErr)).to.include("ActiveDisputesPending");
 
-    // Now resolve dispute 501 via claimTimeout (since resolve timeout elapsed while waiting for withdraw delay)
+    // Wait for resolve timeout to elapse on dispute 501
+    const disputeAccount501: any = await program.account.dispute.fetch(disputePda);
+    const deadline501 = Number(disputeAccount501.openedAt.toString()) + Number(RESOLVE_TIMEOUT.toString());
+    await waitForTimestamp(deadline501);
+
+    // Now resolve dispute 501 via claimTimeout
     await program.methods
       .claimTimeout()
       .accounts({
@@ -1442,6 +1459,16 @@ describe("justice402 program test suite", () => {
 
     const providerResolved: any = await program.account.provider.fetch(providerPda);
     expect(providerResolved.openDisputes.toString()).to.equal("0");
+
+    // Now that openDisputes == 0, requestWithdraw succeeds
+    await program.methods
+      .requestWithdraw()
+      .accounts({
+        providerWallet: providerWallet.publicKey,
+        provider: providerPda,
+      })
+      .signers([providerWallet])
+      .rpc();
   });
 
   it("19. Withdraw restrictions: blocked before delay, succeeds after delay", async () => {

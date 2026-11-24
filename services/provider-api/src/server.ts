@@ -25,6 +25,8 @@ export interface ProviderAppOptions {
   providerKeypair: Keypair;
   specHash?: Buffer;
   priceLamports?: number | BN;
+  allowedOrigin?: string;
+  maxRequestsPerMinute?: number;
 }
 
 export function createProviderApp(options: ProviderAppOptions): express.Application {
@@ -35,9 +37,73 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     providerKeypair,
     specHash = SPEC_HASH,
     priceLamports = 5_000_000, // 5 USDC
+    allowedOrigin = process.env.DASHBOARD_ORIGIN || process.env.ALLOWED_ORIGINS || "*",
+    maxRequestsPerMinute = 60,
   } = options;
 
   let nonceCounter = 1000;
+
+  // 1. CORS Configuration (Restricted to dashboard origin in production)
+  app.use((req: Request, res: Response, next) => {
+    const origin = req.headers.origin;
+    if (allowedOrigin === "*" || (origin && origin === allowedOrigin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin || allowedOrigin);
+    }
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Buyer-Wallet, X-Justice402-Receipt, X-Justice402-Signature, PAYMENT-SIGNATURE");
+    res.setHeader("Access-Control-Expose-Headers", "X-Justice402-Receipt, X-Justice402-Signature, PAYMENT-RESPONSE");
+
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
+  // 2. In-Memory Sliding Window Rate Limiter
+  const requestCounts = new Map<string, { count: number; resetAt: number }>();
+  app.use((req: Request, res: Response, next) => {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    const now = Date.now();
+    const windowRecord = requestCounts.get(ip);
+
+    if (!windowRecord || now > windowRecord.resetAt) {
+      requestCounts.set(ip, { count: 1, resetAt: now + 60_000 });
+      next();
+    } else if (windowRecord.count < maxRequestsPerMinute) {
+      windowRecord.count++;
+      next();
+    } else {
+      res.status(429).json({
+        error: "Too Many Requests",
+        message: `Rate limit of ${maxRequestsPerMinute} requests per minute exceeded.`,
+      });
+    }
+  });
+
+  // 3. Safe Request Logging (Never logs secrets, keys, or private data)
+  app.use((req: Request, res: Response, next) => {
+    const start = Date.now();
+    res.on("finish", () => {
+      const duration = Date.now() - start;
+      const clientIp = req.ip || "unknown";
+      console.log(`[HTTP] ${req.method} ${req.path} ${res.statusCode} (${duration}ms) - IP: ${clientIp}`);
+    });
+    next();
+  });
+
+  // 4. Health Check Endpoint: /health
+  app.get("/health", (_req: Request, res: Response) => {
+    res.json({
+      status: "ok",
+      service: "justice402-provider-api",
+      uptime: process.uptime(),
+      provider: providerKeypair.publicKey.toBase58(),
+      specHash: specHash.toString("hex"),
+      network: "devnet",
+      timestamp: Math.floor(Date.now() / 1000),
+    });
+  });
 
   // 1. Off-chain service spec endpoint: /spec
   app.get("/spec", (_req: Request, res: Response) => {

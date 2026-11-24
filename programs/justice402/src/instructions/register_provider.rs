@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use crate::state::{Config, Provider};
 use crate::events::ProviderRegistered;
+use crate::errors::JusticeError;
 
 #[derive(Accounts)]
 pub struct RegisterProvider<'info> {
@@ -42,6 +43,7 @@ pub fn handle_register_provider(
     bond_amount: u64,
     spec_hash: [u8; 32],
 ) -> Result<()> {
+    require!(spec_hash != [0u8; 32], JusticeError::InvalidConfig);
     let clock = Clock::get()?;
     let provider = &mut ctx.accounts.provider;
     provider.wallet = ctx.accounts.provider_wallet.key();
