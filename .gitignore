@@ -21,3 +21,5 @@ build/
 .system_generated/
 
 .next/
+dashboard/public/demo-run.json
+dashboard/node_modules/

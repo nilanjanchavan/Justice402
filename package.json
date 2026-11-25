@@ -20,6 +20,7 @@
     "init:devnet": "npx ts-node scripts/init-devnet.ts",
     "seed:devnet": "npx ts-node scripts/seed-devnet.ts",
     "demo:devnet": "npx ts-node scripts/demo-devnet.ts",
+    "demo:local": "npx ts-node scripts/demo-local.ts",
     "arbiter": "npx ts-node services/arbiter/src/cli.ts",
     "start:provider": "npx ts-node services/provider-api/src/start.ts",
     "dashboard:dev": "npm run dev --prefix dashboard",
