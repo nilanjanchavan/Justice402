@@ -48,7 +48,7 @@ function CopyButton({ value, label }: { value: string; label?: string }) {
     <button
       type="button"
       onClick={handleCopy}
-      className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-white/[0.06] hover:bg-white/[0.12] border border-white/15 text-zinc-300 transition-colors"
+      className="text-[11px] font-mono px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-100 hover:bg-white/[0.06] transition-colors"
       aria-label={`Copy ${label || "value"}`}
     >
       {copied ? "✓ Copied" : "Copy"}
@@ -148,45 +148,46 @@ export default function DashboardPage() {
   };
 
   const tabs = [
-    { id: "timeline", label: "Demo Run Timeline" },
+    { id: "timeline", label: "Execution Timeline" },
     {
       id: "providers",
       label: `Providers (${hasLiveProviders ? onChainProviders.length : "Sample"})`,
     },
     {
       id: "disputes",
-      label: `Disputes & Settlement (${hasLiveDisputes ? onChainDisputes.length : "Sample"})`,
+      label: `Disputes (${hasLiveDisputes ? onChainDisputes.length : "Sample"})`,
     },
-    { id: "architecture", label: "Architecture & Trust" },
+    { id: "architecture", label: "Architecture" },
   ] as const;
 
   return (
-    <main className="max-w-6xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+    <main className="max-w-5xl mx-auto px-4 py-10 sm:px-6 lg:px-8">
       {/* Header */}
-      <header className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-5 pb-7 mb-7 border-b border-white/15">
+      <header className="flex flex-col md:flex-row md:items-end justify-between gap-6 pb-8">
         <div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-baseline gap-3">
             <h1 className="font-display text-3xl sm:text-4xl font-bold tracking-tight text-white">
               Justice<span className="text-emerald-400">402</span>
             </h1>
-            <span className="text-[11px] font-mono uppercase tracking-wider bg-emerald-500/15 text-emerald-300 px-2.5 py-1 rounded-full border border-emerald-500/30">
-              v1.0 • {isLocalhostRpc ? "Localnet" : "Devnet"}
+            <span className="text-xs font-mono text-zinc-400">
+              v1.0 · {isLocalhostRpc ? "Localnet" : "Devnet"}
             </span>
           </div>
-          <p className="text-sm text-zinc-300 mt-1.5 max-w-xl leading-relaxed">
-            On-chain insurance for HTTP x402 API payments on Solana. Instant settlement, staked USDC bonds, and cryptographic receipts.
+          <p className="text-sm text-zinc-400 mt-1.5 max-w-lg">
+            Bonded insurance for HTTP x402 payments on Solana.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
-          <div className="flex items-center bg-zinc-900 border border-white/15 rounded-xl p-1">
+        {/* Restrained Utility Bar */}
+        <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-zinc-300">
+          <div className="inline-flex items-center bg-zinc-900 border border-white/10 rounded-lg p-0.5">
             <button
               type="button"
               onClick={() => handleClusterSwitch("http://127.0.0.1:8899")}
-              className={`px-3 py-1.5 rounded-lg transition-colors ${
+              className={`px-2.5 py-1 rounded-md transition-colors ${
                 isLocalhostRpc
-                  ? "bg-emerald-500/20 text-emerald-200 font-semibold border border-emerald-500/30"
-                  : "text-zinc-400 hover:text-white"
+                  ? "bg-zinc-800 text-white font-medium"
+                  : "text-zinc-400 hover:text-zinc-200"
               }`}
             >
               Localhost
@@ -194,90 +195,85 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={() => handleClusterSwitch("https://api.devnet.solana.com")}
-              className={`px-3 py-1.5 rounded-lg transition-colors ${
+              className={`px-2.5 py-1 rounded-md transition-colors ${
                 !isLocalhostRpc
-                  ? "bg-emerald-500/20 text-emerald-200 font-semibold border border-emerald-500/30"
-                  : "text-zinc-400 hover:text-white"
+                  ? "bg-zinc-800 text-white font-medium"
+                  : "text-zinc-400 hover:text-zinc-200"
               }`}
             >
               Devnet
             </button>
           </div>
 
+          <span className="text-zinc-700" aria-hidden="true">|</span>
+
           <a
             href={`https://explorer.solana.com/address/${programIdStr}?cluster=devnet`}
             target="_blank"
             rel="noreferrer"
-            className="bg-zinc-900 hover:bg-zinc-800 border border-white/15 px-3 py-2 rounded-xl text-zinc-200 transition-colors"
+            className="text-zinc-400 hover:text-emerald-300 transition-colors"
+            title={`Program ID: ${programIdStr}`}
           >
-            <span className="text-zinc-400">Program:</span>{" "}
-            <span className="text-emerald-300">
-              {programIdStr.slice(0, 5)}...{programIdStr.slice(-4)}
-            </span>
+            {programIdStr.slice(0, 5)}…{programIdStr.slice(-4)} ↗
           </a>
 
-          <div
-            className={`px-3 py-2 rounded-xl flex items-center gap-2 border ${
-              providerHealth
-                ? "bg-emerald-950/50 border-emerald-500/35 text-emerald-200"
-                : "bg-zinc-900 border-white/15 text-zinc-300"
+          <span className="text-zinc-700" aria-hidden="true">|</span>
+
+          <span
+            className={`inline-flex items-center gap-1.5 ${
+              providerHealth ? "text-emerald-300" : "text-zinc-400"
             }`}
           >
             <span aria-hidden="true">{providerHealth ? "●" : "○"}</span>
-            <span>{providerHealth ? "Provider API Online" : "Provider API Offline"}</span>
-          </div>
+            <span>API {providerHealth ? "Online" : "Offline"}</span>
+          </span>
 
           <button
             type="button"
             onClick={() => loadLiveState(rpcUrl)}
-            className="bg-zinc-900 hover:bg-zinc-800 border border-white/15 text-zinc-100 px-3 py-2 rounded-xl transition-colors"
+            className="ml-1 px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-white/10 text-zinc-200 transition-colors"
             title="Refresh on-chain accounts"
           >
-            {chainLoading ? "Syncing..." : "↻ Refresh"}
+            {chainLoading ? "Syncing…" : "↻ Refresh"}
           </button>
         </div>
       </header>
 
-      {/* KPI Metric Strip */}
-      <section aria-label="Protocol metrics" className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mb-8">
-        <div className="bg-zinc-900/70 border border-white/15 rounded-2xl p-4">
-          <span className="text-xs font-medium text-zinc-400 block mb-1">
-            Total Bond Staked
-          </span>
-          <span className="font-display text-2xl font-bold text-white tabular-nums">
+      {/* Unified KPI Strip */}
+      <section
+        aria-label="Protocol metrics"
+        className="grid grid-cols-2 lg:grid-cols-4 bg-zinc-900/50 border border-white/10 rounded-xl divide-y lg:divide-y-0 lg:divide-x divide-white/10 mb-8"
+      >
+        <div className="p-4 sm:p-5">
+          <span className="text-xs text-zinc-400 block mb-1">Total Bond Staked</span>
+          <span className="font-display text-2xl font-semibold text-white tabular-nums">
             {totalStakedUsdc.toFixed(2)}{" "}
-            <span className="text-xs font-mono font-normal text-emerald-300">USDC</span>
+            <span className="text-xs font-mono font-normal text-zinc-400">USDC</span>
           </span>
         </div>
-        <div className="bg-zinc-900/70 border border-white/15 rounded-2xl p-4">
-          <span className="text-xs font-medium text-zinc-400 block mb-1">
-            Registered Providers
-          </span>
-          <span className="font-display text-2xl font-bold text-white tabular-nums">
+        <div className="p-4 sm:p-5">
+          <span className="text-xs text-zinc-400 block mb-1">Registered Providers</span>
+          <span className="font-display text-2xl font-semibold text-white tabular-nums">
             {providerCount}{" "}
-            <span className="text-xs font-mono font-normal text-zinc-400">
+            <span className="text-xs font-mono font-normal text-zinc-500">
               {hasLiveProviders ? "on-chain" : "sample"}
             </span>
           </span>
         </div>
-        <div className="bg-zinc-900/70 border border-white/15 rounded-2xl p-4">
-          <span className="text-xs font-medium text-zinc-400 block mb-1">
-            Disputes Tracked
-          </span>
-          <span className="font-display text-2xl font-bold text-white tabular-nums">
+        <div className="p-4 sm:p-5">
+          <span className="text-xs text-zinc-400 block mb-1">Disputes Tracked</span>
+          <span className="font-display text-2xl font-semibold text-white tabular-nums">
             {disputeCount}{" "}
-            <span className="text-xs font-mono font-normal text-zinc-400">
+            <span className="text-xs font-mono font-normal text-zinc-500">
               {hasLiveDisputes ? "on-chain" : "sample"}
             </span>
           </span>
         </div>
-        <div className="bg-zinc-900/70 border border-white/15 rounded-2xl p-4">
-          <span className="text-xs font-medium text-zinc-400 block mb-1">
-            Total Bond Slashed
-          </span>
-          <span className="font-display text-2xl font-bold text-rose-300 tabular-nums">
+        <div className="p-4 sm:p-5">
+          <span className="text-xs text-zinc-400 block mb-1">Total Bond Slashed</span>
+          <span className="font-display text-2xl font-semibold text-rose-300 tabular-nums">
             {totalSlashedUsdc.toFixed(2)}{" "}
-            <span className="text-xs font-mono font-normal text-rose-300/80">USDC</span>
+            <span className="text-xs font-mono font-normal text-rose-300/70">USDC</span>
           </span>
         </div>
       </section>
@@ -285,17 +281,17 @@ export default function DashboardPage() {
       {chainError && (
         <div
           role="status"
-          className="mb-6 bg-amber-950/40 border border-amber-500/35 text-amber-200 px-4 py-3 rounded-xl text-xs font-mono"
+          className="mb-6 bg-amber-950/30 border border-amber-500/30 text-amber-200 px-4 py-2.5 rounded-lg text-xs font-mono"
         >
-          ⚠ RPC notice ({rpcUrl}): {chainError}. Displaying sample fallback data where live state is unavailable.
+          ⚠ RPC notice ({rpcUrl}): {chainError}. Showing sample fallback data.
         </div>
       )}
 
-      {/* Navigation Tabs (single non-wrapping row with accessible underline indicator) */}
+      {/* Navigation Tabs */}
       <div
         role="tablist"
         aria-label="Justice402 dashboard sections"
-        className="flex flex-nowrap overflow-x-auto gap-1 border-b border-white/15 mb-8"
+        className="flex flex-nowrap overflow-x-auto gap-2 border-b border-white/10 mb-8"
       >
         {tabs.map((tab) => {
           const selected = activeTab === tab.id;
@@ -307,10 +303,10 @@ export default function DashboardPage() {
               id={`tab-${tab.id}`}
               aria-selected={selected}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex-none px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap ${
+              className={`flex-none px-3 py-2.5 text-sm font-medium transition-colors whitespace-nowrap ${
                 selected
-                  ? "text-emerald-300"
-                  : "text-zinc-400 hover:text-zinc-100"
+                  ? "text-white"
+                  : "text-zinc-400 hover:text-zinc-200"
               }`}
             >
               {tab.label}
@@ -319,102 +315,85 @@ export default function DashboardPage() {
         })}
       </div>
 
-      {/* TAB 1: DEMO RUN TIMELINE */}
+      {/* TAB 1: EXECUTION TIMELINE */}
       <div
         role="tabpanel"
         aria-labelledby="tab-timeline"
         hidden={activeTab !== "timeline"}
       >
         {activeTab === "timeline" && (
-          <section className="space-y-6">
-            <div className="bg-zinc-900/70 border border-white/15 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h2 className="font-display text-lg font-semibold text-white">
-                  {demoData.network || "Devnet"} Execution Timeline
-                </h2>
-                <p className="text-xs sm:text-sm text-zinc-300 mt-0.5">
-                  {isUsingFallback
-                    ? "Sample execution trace illustrating on-chain transaction signatures, Ed25519 introspection proofs, and settlement results."
-                    : `Recorded live execution at ${new Date(demoData.executedAt).toLocaleString()} on ${demoData.network}.`}
-                </p>
-              </div>
-              {isUsingFallback ? (
-                <span className="text-xs font-mono font-medium uppercase bg-amber-500/15 text-amber-200 border border-amber-500/35 px-3 py-1 rounded-full whitespace-nowrap">
-                  ⚠ Sample Data (Pending Devnet Run)
-                </span>
-              ) : (
-                <span className="text-xs font-mono font-medium uppercase bg-emerald-500/15 text-emerald-200 border border-emerald-500/35 px-3 py-1 rounded-full whitespace-nowrap">
-                  ✓ Live Execution Trace
-                </span>
-              )}
+          <section className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2">
+              <p className="text-xs font-mono text-zinc-400">
+                {isUsingFallback
+                  ? "Trace source: Sample fallback data (pending live devnet run)"
+                  : `Trace source: ${demoData.network} · ${new Date(demoData.executedAt).toLocaleString()}`}
+              </p>
+              <span
+                className={`text-xs font-mono ${
+                  isUsingFallback ? "text-amber-300" : "text-emerald-300"
+                }`}
+              >
+                {isUsingFallback ? "⚠ Sample Data" : "✓ Live Trace"}
+              </span>
             </div>
 
-            <div className="relative border-l border-white/15 ml-3 sm:ml-5 space-y-5 pb-4">
+            <div className="divide-y divide-white/10 bg-zinc-900/40 border border-white/10 rounded-xl">
               {demoData.steps.map((s: StepRecord) => (
-                <div key={s.step} className="relative pl-6 sm:pl-8 group">
-                  <div className="absolute -left-[7px] top-6 w-3.5 h-3.5 rounded-full bg-zinc-950 border-2 border-emerald-400 flex items-center justify-center">
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
-                  </div>
-
-                  <div className="bg-zinc-900/70 border border-white/15 rounded-2xl p-5 hover:border-white/25 transition-colors">
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                      <div className="flex items-center gap-2.5">
-                        <span className="text-[11px] font-mono font-semibold text-emerald-200 bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-0.5 rounded-full">
-                          STEP {s.step}
-                        </span>
-                        <h3 className="font-display text-base font-semibold text-white">
-                          {s.title}
-                        </h3>
-                      </div>
-                      <span className="text-[11px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-200 border border-emerald-500/30">
-                        ✓ {s.status}
+                <div key={s.step} className="p-5 sm:p-6">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1.5">
+                    <div className="flex items-baseline gap-3">
+                      <span className="font-mono text-xs text-zinc-500">
+                        {String(s.step).padStart(2, "0")}
                       </span>
+                      <h3 className="font-display text-base font-semibold text-white">
+                        {s.title}
+                      </h3>
                     </div>
-
-                    <p className="text-sm text-zinc-300 mb-3.5 leading-relaxed">
-                      {s.description}
-                    </p>
-
-                    {s.details && (
-                      <div className="space-y-2 mb-3">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          {Object.entries(s.details).map(([k, v]) => (
-                            <div
-                              key={k}
-                              className="bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs font-mono flex items-start justify-between gap-2"
-                            >
-                              <span className="text-zinc-400 shrink-0">{k}:</span>
-                              <span className="text-zinc-200 break-all text-right">
-                                {typeof v === "object" ? JSON.stringify(v) : String(v)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {s.txSignature && (
-                      <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-white/10">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs text-zinc-400 font-mono">Tx:</span>
-                          <a
-                            href={explorerTxUrl(s.txSignature, s.explorerUrl)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs font-mono text-emerald-300 hover:text-emerald-200 hover:underline break-all"
-                          >
-                            {s.txSignature} ↗
-                          </a>
-                          {isUsingFallback && (
-                            <span className="text-[10px] font-mono text-amber-200 bg-amber-500/15 px-2 py-0.5 rounded-full border border-amber-500/30">
-                              SAMPLE DATA
-                            </span>
-                          )}
-                        </div>
-                        <CopyButton value={s.txSignature} label="transaction signature" />
-                      </div>
-                    )}
+                    <span className="font-mono text-xs text-emerald-300">
+                      ✓ {s.status}
+                    </span>
                   </div>
+
+                  <p className="text-sm text-zinc-400 mb-4 pl-7 leading-relaxed">
+                    {s.description}
+                  </p>
+
+                  {s.details && (
+                    <dl className="pl-7 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs font-mono mb-3">
+                      {Object.entries(s.details).map(([k, v]) => (
+                        <div
+                          key={k}
+                          className="flex items-baseline justify-between gap-3 py-1 border-b border-white/[0.05]"
+                        >
+                          <dt className="text-zinc-500 shrink-0">{k}</dt>
+                          <dd className="text-zinc-200 truncate text-right" title={typeof v === "object" ? JSON.stringify(v) : String(v)}>
+                            {typeof v === "object" ? JSON.stringify(v) : String(v)}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
+
+                  {s.txSignature && (
+                    <div className="pl-7 flex flex-wrap items-center justify-between gap-2 pt-2">
+                      <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+                        <span className="text-zinc-500">Tx:</span>
+                        <a
+                          href={explorerTxUrl(s.txSignature, s.explorerUrl)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-emerald-300 hover:underline break-all"
+                        >
+                          {s.txSignature.slice(0, 20)}…{s.txSignature.slice(-12)} ↗
+                        </a>
+                        {isUsingFallback && (
+                          <span className="text-[11px] text-amber-300">(Sample)</span>
+                        )}
+                      </div>
+                      <CopyButton value={s.txSignature} label="transaction signature" />
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -422,29 +401,21 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* TAB 2: LIVE PROVIDERS */}
+      {/* TAB 2: PROVIDERS */}
       <div
         role="tabpanel"
         aria-labelledby="tab-providers"
         hidden={activeTab !== "providers"}
       >
         {activeTab === "providers" && (
-          <section className="space-y-6">
-            <div className="bg-zinc-900/70 border border-white/15 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <h2 className="font-display text-lg font-semibold text-white">
-                  On-Chain Registered Providers
-                </h2>
-                <p className="text-xs sm:text-sm text-zinc-300 mt-0.5">
-                  Providers stake USDC bonds in the Solana program and commit to an immutable{" "}
-                  <code className="font-mono text-emerald-300">spec_hash</code>.
-                </p>
-              </div>
+          <section className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2">
+              <p className="text-xs font-mono text-zinc-400">
+                Registered provider bonds and immutable <code className="text-zinc-200">spec_hash</code> track records
+              </p>
               <span
-                className={`text-xs font-mono font-medium uppercase px-3 py-1 rounded-full border ${
-                  hasLiveProviders
-                    ? "bg-emerald-500/15 text-emerald-200 border-emerald-500/35"
-                    : "bg-amber-500/15 text-amber-200 border-amber-500/35"
+                className={`text-xs font-mono ${
+                  hasLiveProviders ? "text-emerald-300" : "text-amber-300"
                 }`}
               >
                 {hasLiveProviders ? `✓ Live RPC (${onChainProviders.length})` : "⚠ Sample Data"}
@@ -452,7 +423,7 @@ export default function DashboardPage() {
             </div>
 
             {hasLiveProviders ? (
-              <div className="grid grid-cols-1 gap-4">
+              <div className="divide-y divide-white/10 bg-zinc-900/40 border border-white/10 rounded-xl">
                 {onChainProviders.map((p) => {
                   const isSlashed = p.disputesBuyerWon > 0 || p.totalSlashedUsdc > 0;
                   const totalResolved = p.disputesBuyerWon + p.disputesProviderWon;
@@ -461,61 +432,57 @@ export default function DashboardPage() {
                       ? Math.round((p.disputesBuyerWon / totalResolved) * 100)
                       : 0;
                   return (
-                    <div
-                      key={p.pda}
-                      className="bg-zinc-900/70 border border-white/15 rounded-2xl p-5 hover:border-white/25 transition-colors"
-                    >
+                    <div key={p.pda} className="p-5 sm:p-6">
                       <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex items-center gap-2">
                           <div>
-                            <h3 className="font-mono font-medium text-white text-sm">
+                            <div className="font-mono text-sm font-medium text-white">
                               {p.wallet}
-                            </h3>
-                            <p className="text-xs font-mono text-zinc-400 mt-0.5">
+                            </div>
+                            <div className="font-mono text-xs text-zinc-500 mt-0.5">
                               PDA: {p.pda}
-                            </p>
+                            </div>
                           </div>
                           <CopyButton value={p.wallet} label="provider wallet" />
                         </div>
                         <span
-                          className={`text-xs font-mono px-2.5 py-1 rounded-full border ${
-                            isSlashed
-                              ? "bg-rose-500/15 text-rose-200 border-rose-500/35"
-                              : "bg-emerald-500/15 text-emerald-200 border-emerald-500/35"
+                          className={`text-xs font-mono ${
+                            isSlashed ? "text-rose-300" : "text-emerald-300"
                           }`}
                         >
                           {isSlashed
-                            ? `✕ SLASHED • LOSS RATE ${lossRate}%`
-                            : "✓ TRUSTED • 0 LOSSES"}
+                            ? `✕ Slashed (${lossRate}% loss)`
+                            : "✓ Trusted (0 losses)"}
                         </span>
                       </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
-                        <div className="bg-black/40 p-3 rounded-xl border border-white/10">
-                          <span className="text-zinc-400 block mb-0.5">Staked Bond</span>
-                          <span className="text-white font-semibold text-sm tabular-nums">
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-mono">
+                        <div>
+                          <span className="text-zinc-500 block mb-0.5">Staked Bond</span>
+                          <span className="text-white font-medium text-sm tabular-nums">
                             {p.bondUsdc.toFixed(2)} USDC
                           </span>
                         </div>
-                        <div className="bg-black/40 p-3 rounded-xl border border-white/10">
-                          <span className="text-zinc-400 block mb-0.5">Locked / Open</span>
-                          <span className="text-zinc-200 font-semibold text-sm tabular-nums">
+                        <div>
+                          <span className="text-zinc-500 block mb-0.5">Locked / Open</span>
+                          <span className="text-zinc-200 font-medium text-sm tabular-nums">
                             {p.lockedUsdc.toFixed(2)} USDC ({p.openDisputes})
                           </span>
                         </div>
-                        <div className="bg-black/40 p-3 rounded-xl border border-white/10">
-                          <span className="text-zinc-400 block mb-0.5">Losses / Slashed</span>
+                        <div>
+                          <span className="text-zinc-500 block mb-0.5">Slashed</span>
                           <span
-                            className={`font-semibold text-sm tabular-nums ${
+                            className={`font-medium text-sm tabular-nums ${
                               isSlashed ? "text-rose-300" : "text-emerald-300"
                             }`}
                           >
                             {p.disputesBuyerWon} ({p.totalSlashedUsdc.toFixed(2)} USDC)
                           </span>
                         </div>
-                        <div className="bg-black/40 p-3 rounded-xl border border-white/10">
-                          <span className="text-zinc-400 block mb-0.5">Spec Hash</span>
-                          <span className="text-zinc-200 font-medium truncate block">
-                            {p.specHashHex.slice(0, 14)}...
+                        <div>
+                          <span className="text-zinc-500 block mb-0.5">Spec Hash</span>
+                          <span className="text-zinc-300 truncate block">
+                            {p.specHashHex.slice(0, 14)}…
                           </span>
                         </div>
                       </div>
@@ -524,71 +491,71 @@ export default function DashboardPage() {
                 })}
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-4">
-                <div className="bg-zinc-900/70 border border-white/15 rounded-2xl p-5">
+              <div className="divide-y divide-white/10 bg-zinc-900/40 border border-white/10 rounded-xl">
+                <div className="p-5 sm:p-6">
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
                     <div>
-                      <h3 className="font-display font-semibold text-white">
+                      <div className="font-display font-semibold text-white">
                         Honest Weather Service (Sample)
-                      </h3>
-                      <p className="text-xs font-mono text-zinc-400">
-                        Endpoint: /weather (Passes spec)
-                      </p>
+                      </div>
+                      <div className="font-mono text-xs text-zinc-400">
+                        /weather · Spec compliant
+                      </div>
                     </div>
-                    <span className="text-xs font-mono px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-200 border border-emerald-500/35">
-                      ✓ TRUSTED • 100% PASS RATE
+                    <span className="text-xs font-mono text-emerald-300">
+                      ✓ Trusted (0 losses)
                     </span>
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
-                    <div className="bg-black/40 p-3 rounded-xl border border-white/10">
-                      <span className="text-zinc-400 block mb-0.5">Staked Bond</span>
-                      <span className="text-white font-semibold text-sm">100.00 USDC</span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-mono">
+                    <div>
+                      <span className="text-zinc-500 block mb-0.5">Staked Bond</span>
+                      <span className="text-white font-medium text-sm">100.00 USDC</span>
                     </div>
-                    <div className="bg-black/40 p-3 rounded-xl border border-white/10">
-                      <span className="text-zinc-400 block mb-0.5">Locked</span>
-                      <span className="text-zinc-200 font-semibold text-sm">0.00 USDC</span>
+                    <div>
+                      <span className="text-zinc-500 block mb-0.5">Locked</span>
+                      <span className="text-zinc-200 font-medium text-sm">0.00 USDC</span>
                     </div>
-                    <div className="bg-black/40 p-3 rounded-xl border border-white/10">
-                      <span className="text-zinc-400 block mb-0.5">Losses / Slashed</span>
-                      <span className="text-emerald-300 font-semibold text-sm">0 (0.00 USDC)</span>
+                    <div>
+                      <span className="text-zinc-500 block mb-0.5">Slashed</span>
+                      <span className="text-emerald-300 font-medium text-sm">0 (0.00 USDC)</span>
                     </div>
-                    <div className="bg-black/40 p-3 rounded-xl border border-white/10">
-                      <span className="text-zinc-400 block mb-0.5">Spec Hash</span>
-                      <span className="text-zinc-300 font-medium truncate block">098199b4578...</span>
+                    <div>
+                      <span className="text-zinc-500 block mb-0.5">Spec Hash</span>
+                      <span className="text-zinc-300 truncate block">098199b4578…</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-zinc-900/70 border border-white/15 rounded-2xl p-5">
+                <div className="p-5 sm:p-6">
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
                     <div>
-                      <h3 className="font-display font-semibold text-white">
-                        Corrupted / Lying Provider (Sample)
-                      </h3>
-                      <p className="text-xs font-mono text-zinc-400">
-                        Endpoint: /weather-lying (Gross range violations)
-                      </p>
+                      <div className="font-display font-semibold text-white">
+                        Lying Provider (Sample)
+                      </div>
+                      <div className="font-mono text-xs text-zinc-400">
+                        /weather-lying · Out-of-range responses
+                      </div>
                     </div>
-                    <span className="text-xs font-mono px-2.5 py-1 rounded-full bg-rose-500/15 text-rose-200 border border-rose-500/35">
-                      ✕ SLASHED • LOSS RATE 100%
+                    <span className="text-xs font-mono text-rose-300">
+                      ✕ Slashed (100% loss)
                     </span>
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
-                    <div className="bg-black/40 p-3 rounded-xl border border-white/10">
-                      <span className="text-zinc-400 block mb-0.5">Remaining Bond</span>
-                      <span className="text-white font-semibold text-sm">95.00 USDC</span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-mono">
+                    <div>
+                      <span className="text-zinc-500 block mb-0.5">Remaining Bond</span>
+                      <span className="text-white font-medium text-sm">95.00 USDC</span>
                     </div>
-                    <div className="bg-black/40 p-3 rounded-xl border border-white/10">
-                      <span className="text-zinc-400 block mb-0.5">Active Disputes</span>
-                      <span className="text-zinc-200 font-semibold text-sm">0 Open</span>
+                    <div>
+                      <span className="text-zinc-500 block mb-0.5">Active Disputes</span>
+                      <span className="text-zinc-200 font-medium text-sm">0 Open</span>
                     </div>
-                    <div className="bg-black/40 p-3 rounded-xl border border-white/10">
-                      <span className="text-zinc-400 block mb-0.5">Losses / Slashed</span>
-                      <span className="text-rose-300 font-semibold text-sm">1 (5.00 USDC)</span>
+                    <div>
+                      <span className="text-zinc-500 block mb-0.5">Slashed</span>
+                      <span className="text-rose-300 font-medium text-sm">1 (5.00 USDC)</span>
                     </div>
-                    <div className="bg-black/40 p-3 rounded-xl border border-white/10">
-                      <span className="text-zinc-400 block mb-0.5">Buyer Spend Policy</span>
-                      <span className="text-rose-200 font-semibold">REJECTED PRE-FLIGHT</span>
+                    <div>
+                      <span className="text-zinc-500 block mb-0.5">Buyer Policy</span>
+                      <span className="text-rose-300 font-medium">Rejected</span>
                     </div>
                   </div>
                 </div>
@@ -598,28 +565,21 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* TAB 3: DISPUTES & SETTLEMENT */}
+      {/* TAB 3: DISPUTES */}
       <div
         role="tabpanel"
         aria-labelledby="tab-disputes"
         hidden={activeTab !== "disputes"}
       >
         {activeTab === "disputes" && (
-          <section className="space-y-6">
-            <div className="bg-zinc-900/70 border border-white/15 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <h2 className="font-display text-lg font-semibold text-white">
-                  On-Chain Disputes Lifecycle
-                </h2>
-                <p className="text-xs sm:text-sm text-zinc-300 mt-0.5">
-                  Disputes require a 1 USDC dispute deposit to prevent griefing. Ruled disputes pay out from provider bond.
-                </p>
-              </div>
+          <section className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2">
+              <p className="text-xs font-mono text-zinc-400">
+                1.00 USDC anti-griefing deposit required per dispute; payouts settle from provider bond
+              </p>
               <span
-                className={`text-xs font-mono font-medium uppercase px-3 py-1 rounded-full border ${
-                  hasLiveDisputes
-                    ? "bg-emerald-500/15 text-emerald-200 border-emerald-500/35"
-                    : "bg-amber-500/15 text-amber-200 border-amber-500/35"
+                className={`text-xs font-mono ${
+                  hasLiveDisputes ? "text-emerald-300" : "text-amber-300"
                 }`}
               >
                 {hasLiveDisputes ? `✓ Live RPC (${onChainDisputes.length})` : "⚠ Sample Data"}
@@ -630,13 +590,13 @@ export default function DashboardPage() {
               tabIndex={0}
               role="region"
               aria-labelledby={tableCaptionId}
-              className="table-wrapper bg-zinc-900/70 border border-white/15 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
+              className="table-wrapper bg-zinc-900/40 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
             >
               <table className="disputes-table w-full text-left text-xs sm:text-sm font-mono">
                 <caption id={tableCaptionId} className="sr-only">
                   On-chain disputes and settlement payouts
                 </caption>
-                <thead className="bg-zinc-950 text-zinc-300 border-b border-white/15">
+                <thead className="bg-zinc-950/90 text-zinc-400 border-b border-white/10">
                   <tr>
                     <th scope="col" className="p-4 font-medium">Dispute PDA</th>
                     <th scope="col" className="p-4 font-medium">Claim</th>
@@ -648,29 +608,33 @@ export default function DashboardPage() {
                 <tbody className="divide-y divide-white/10">
                   {hasLiveDisputes ? (
                     onChainDisputes.map((d) => (
-                      <tr key={d.pda} className="hover:bg-white/[0.03] transition-colors">
-                        <th scope="row" className="p-4 text-emerald-300 font-medium text-left">
+                      <tr key={d.pda} className="hover:bg-white/[0.02] transition-colors">
+                        <th scope="row" className="p-4 text-zinc-100 font-medium text-left">
                           <span className="inline-flex items-center gap-2">
-                            <span>{d.pda.slice(0, 8)}...{d.pda.slice(-6)}</span>
+                            <span>{d.pda.slice(0, 8)}…{d.pda.slice(-6)}</span>
                             <CopyButton value={d.pda} label="dispute PDA" />
                           </span>
                         </th>
-                        <td className="p-4 tabular-nums">{d.claimAmountUsdc.toFixed(2)} USDC</td>
-                        <td className="p-4 tabular-nums">{d.depositAmountUsdc.toFixed(2)} USDC</td>
+                        <td className="p-4 tabular-nums text-zinc-300">{d.claimAmountUsdc.toFixed(2)} USDC</td>
+                        <td className="p-4 tabular-nums text-zinc-300">{d.depositAmountUsdc.toFixed(2)} USDC</td>
                         <td className="p-4">
                           <span
-                            className={`px-2.5 py-0.5 rounded-full text-xs border ${
+                            className={`text-xs ${
                               d.status === "BuyerWins"
-                                ? "bg-emerald-500/15 text-emerald-200 border-emerald-500/35"
+                                ? "text-emerald-300"
                                 : d.status === "Open"
-                                ? "bg-amber-500/15 text-amber-200 border-amber-500/35"
-                                : "bg-zinc-800 text-zinc-200 border-white/15"
+                                ? "text-amber-300"
+                                : "text-zinc-300"
                             }`}
                           >
-                            {d.status === "BuyerWins" ? "✓ BuyerWins" : d.status === "Open" ? "⧗ Open" : d.status}
+                            {d.status === "BuyerWins"
+                              ? "✓ BuyerWins"
+                              : d.status === "Open"
+                              ? "⧗ Open"
+                              : d.status}
                           </span>
                         </td>
-                        <td className="p-4 text-white font-semibold tabular-nums">
+                        <td className="p-4 text-white font-medium tabular-nums">
                           {d.status === "BuyerWins" || d.status === "TimedOut"
                             ? `${(d.claimAmountUsdc + d.depositAmountUsdc).toFixed(2)} USDC (Claim + Deposit)`
                             : d.status === "Open"
@@ -681,17 +645,13 @@ export default function DashboardPage() {
                     ))
                   ) : (
                     <tr>
-                      <th scope="row" className="p-4 text-emerald-300 font-medium text-left">
-                        8vKYbW2Qo...jf98M (Sample)
+                      <th scope="row" className="p-4 text-zinc-100 font-medium text-left">
+                        8vKYbW2Qo…jf98M (Sample)
                       </th>
-                      <td className="p-4">5.00 USDC</td>
-                      <td className="p-4">1.00 USDC</td>
-                      <td className="p-4">
-                        <span className="bg-emerald-500/15 text-emerald-200 border border-emerald-500/35 px-2.5 py-0.5 rounded-full text-xs">
-                          ✓ BuyerWins
-                        </span>
-                      </td>
-                      <td className="p-4 text-white font-semibold">
+                      <td className="p-4 text-zinc-300">5.00 USDC</td>
+                      <td className="p-4 text-zinc-300">1.00 USDC</td>
+                      <td className="p-4 text-emerald-300">✓ BuyerWins</td>
+                      <td className="p-4 text-white font-medium">
                         6.00 USDC (Claim + Deposit)
                       </td>
                     </tr>
@@ -703,49 +663,47 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* TAB 4: ARCHITECTURE & TRUST */}
+      {/* TAB 4: ARCHITECTURE */}
       <div
         role="tabpanel"
         aria-labelledby="tab-architecture"
         hidden={activeTab !== "architecture"}
       >
         {activeTab === "architecture" && (
-          <section className="space-y-6 text-sm text-zinc-300">
-            <div className="bg-zinc-900/70 border border-white/15 rounded-2xl p-6 space-y-5">
-              <h2 className="font-display text-xl font-bold text-white">
+          <section className="bg-zinc-900/40 border border-white/10 rounded-xl p-6 space-y-6 text-sm text-zinc-300">
+            <div>
+              <h2 className="font-display text-lg font-semibold text-white mb-2">
                 Why Justice402 is Insurance, Not Escrow
               </h2>
-              <p className="leading-relaxed text-zinc-300">
-                In traditional API escrow schemes, funds are locked during HTTP execution, introducing latency, third-party
-                custody, and custom payment protocols. Justice402 preserves standard, instant x402 V2 settlement. Buyers pay
-                directly; providers back their service promises with an on-chain bond staked on Solana.
+              <p className="leading-relaxed text-zinc-400">
+                Traditional API escrow locks funds during HTTP execution, adding latency and custody risk. Justice402 preserves instant x402 V2 settlement: buyers pay directly, and providers back their service guarantees with an on-chain USDC bond.
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
-                <div className="bg-black/40 p-4 rounded-xl border border-white/10">
-                  <h3 className="font-display font-semibold text-emerald-300 mb-1.5">
-                    Provider-Signed Receipts
-                  </h3>
-                  <p className="text-xs text-zinc-300 leading-relaxed">
-                    Canonical 249-byte receipts signed via Ed25519 commit to the request, response, price, spec hash, and timestamp.
-                  </p>
-                </div>
-                <div className="bg-black/40 p-4 rounded-xl border border-white/10">
-                  <h3 className="font-display font-semibold text-emerald-300 mb-1.5">
-                    Deterministic Spec Audits
-                  </h3>
-                  <p className="text-xs text-zinc-300 leading-relaxed">
-                    Off-chain JSON Schema, numerical bounds, and freshness rules are verified against the on-chain{" "}
-                    <code className="font-mono text-emerald-200">spec_hash</code>.
-                  </p>
-                </div>
-                <div className="bg-black/40 p-4 rounded-xl border border-white/10">
-                  <h3 className="font-display font-semibold text-emerald-300 mb-1.5">
-                    Trusted Human Arbiter
-                  </h3>
-                  <p className="text-xs text-zinc-300 leading-relaxed">
-                    The human arbiter wallet audits evidence before signing. Liveness is covered by permissionless timeouts.
-                  </p>
-                </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-4 border-t border-white/10">
+              <div>
+                <h3 className="font-display font-medium text-white mb-1">
+                  Provider-Signed Receipts
+                </h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  249-byte Ed25519 receipts commit to the request, response, price, spec hash, and timestamp.
+                </p>
+              </div>
+              <div>
+                <h3 className="font-display font-medium text-white mb-1">
+                  Deterministic Spec Audits
+                </h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  JSON Schema, numeric ranges, and freshness rules are checked against the on-chain{" "}
+                  <code className="font-mono text-zinc-200">spec_hash</code>.
+                </p>
+              </div>
+              <div>
+                <h3 className="font-display font-medium text-white mb-1">
+                  Human Arbiter & Timeout
+                </h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  A human arbiter reviews evidence before signing rulings; permissionless timeouts protect buyers if the arbiter stalls.
+                </p>
               </div>
             </div>
           </section>

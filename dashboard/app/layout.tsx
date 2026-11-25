@@ -1,4 +1,12 @@
 import type { Metadata } from "next";
+import "@fontsource/inter/400.css";
+import "@fontsource/inter/500.css";
+import "@fontsource/inter/600.css";
+import "@fontsource/space-grotesk/600.css";
+import "@fontsource/space-grotesk/700.css";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
+import "@fontsource/jetbrains-mono/600.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -16,22 +24,12 @@ export default function RootLayout({
     <html lang="en">
       <head>
         <meta name="color-scheme" content="dark" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-          rel="preconnect"
-          href="https://fonts.gstatic.com"
-          crossOrigin="anonymous"
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@600;700&display=swap"
-          rel="stylesheet"
-        />
       </head>
       <body className="min-h-screen font-sans text-zinc-100 antialiased selection:bg-emerald-500/30 selection:text-emerald-200">
         {/* Persistent Demo Notice Banner */}
-        <div className="bg-amber-500/10 border-b border-amber-500/25 px-4 py-2 text-center text-xs font-medium tracking-wide text-amber-200 flex items-center justify-center gap-2">
+        <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-1.5 text-center text-[11px] font-mono tracking-wide text-amber-200/90 flex items-center justify-center gap-2">
           <span aria-hidden="true" className="text-amber-400">●</span>
-          <span>DEVNET / LOCALNET DEMO — NO REAL FUNDS AT RISK (x402 V2 + Solana)</span>
+          <span>DEVNET / LOCALNET DEMO — NO REAL FUNDS AT RISK</span>
         </div>
         {children}
       </body>
