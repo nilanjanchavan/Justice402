@@ -94,7 +94,7 @@ async function main() {
   const existingConfig = await connection.getAccountInfo(configPda);
   if (existingConfig) {
     console.log("[IDEMPOTENT] Program Config is ALREADY initialized on devnet!");
-    const configData: any = await program.account.config.fetch(configPda);
+    const configData: any = await (program.account as any).config.fetch(configPda);
     console.log("Current Configuration on Devnet:");
     console.log(`  Arbiter:                     ${configData.arbiter.toBase58()}`);
     console.log(`  USDC Mint:                   ${configData.usdcMint.toBase58()}`);

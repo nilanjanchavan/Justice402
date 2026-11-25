@@ -1,0 +1,42 @@
+{
+  "cluster": "devnet",
+  "programId": "2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ",
+  "configPda": "91rJSHfVSPpzYDsrCtP51w5a1c9bCEiUwzBMUtaNXPcn",
+  "vaultPda": "7mSkX4ctNXx4gdPnMWtR8ZGwXhvhCZ8EsBspemdvm8DR",
+  "usdcMint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  "providers": {
+    "/weather": {
+      "name": "Honest Weather Provider",
+      "wallet": "B6aqccJWm4GF8t7nPQREAvX48SJKSzrGxXj4eNUko8kU",
+      "providerPda": "128X6JQpe61qQg5WucGR3xAHHU1MnXCE8dXWapdJEmFx",
+      "ata": "Cg915zRFuNQoXU7UpwCvhc3NxcoWRj5o1h4gD5SSY6BB",
+      "bond": "0",
+      "locked": "0",
+      "specHash": "5e7631c8d218f8ad1f002cc8e664626ae930644ef194a96e8ad85251bff8718e",
+      "registrationTx": "3xxTkfnCFih1Ai4sCC3xz2R8gNzDMjsBtYeKYyQaLk9cDVuiZqLmtv2xFAKn3BCAvHt7tcsYcE8ZNdEnwvcGBjGR",
+      "alreadyRegistered": false
+    },
+    "/weather-lying": {
+      "name": "Lying Weather Provider (Gross Violations)",
+      "wallet": "HjhJXmv1ZMuc2QaNMEvVMzDSKFSg2ftCajyiuVj6oCbx",
+      "providerPda": "AgdAjQjJMjh1sC46EAhwSQmso5EYjYQmqjGArhkVmkDc",
+      "ata": "7bz3oEW6qh9KuAVk8y8tmMHz9hkbEmSoEAR22uZPwsz5",
+      "bond": "0",
+      "locked": "0",
+      "specHash": "5e7631c8d218f8ad1f002cc8e664626ae930644ef194a96e8ad85251bff8718e",
+      "registrationTx": "5qciRQwdV9CKCcK2Xo93f9y4yakz5dWdNRZCwRWHeKhtJqwhT9sQvH5BcC62GUZgr7VZYauym4a9xDQFRdnKSQ89",
+      "alreadyRegistered": false
+    },
+    "/weather-plausible-wrong": {
+      "name": "Plausible-Wrong Provider (Subtle Contradiction)",
+      "wallet": "DyymyZfsaSPNpbBFpZTzxK1k7PXPEirPJ39hcTbN1L2Q",
+      "providerPda": "FrwZ5qJ58juvwiRHdKq5qbF2gsKVzUeYohjMEZDcN6gj",
+      "ata": "BHRxfHknxAJX6urqMsUoD9KetmnyqWRX6Nnhew1g11aL",
+      "bond": "0",
+      "locked": "0",
+      "specHash": "5e7631c8d218f8ad1f002cc8e664626ae930644ef194a96e8ad85251bff8718e",
+      "registrationTx": "4apu5eJFRdBpZ9QEQ2RJcAvbQ9NpiAGLi5q7UoK8yZUwFTtBHmvWUKsMCPUBpQm7HPRWSteHqbJffFKZi76rHHhB",
+      "alreadyRegistered": false
+    }
+  }
+}

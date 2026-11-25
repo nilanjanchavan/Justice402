@@ -109,7 +109,7 @@ async function main() {
     const existingProvider = await connection.getAccountInfo(pPda);
     if (existingProvider) {
       console.log(`  Status:       ALREADY REGISTERED (Idempotent)`);
-      const providerData: any = await program.account.provider.fetch(pPda);
+      const providerData: any = await (program.account as any).provider.fetch(pPda);
       console.log(`  Current Bond: ${providerData.bond.toString()} units`);
       console.log(`  Locked:       ${providerData.locked.toString()} units`);
       console.log(`  Spec Hash:    ${Buffer.from(providerData.specHash).toString("hex")}`);
