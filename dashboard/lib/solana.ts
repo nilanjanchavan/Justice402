@@ -1,19 +1,19 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 
-export const PROGRAM_ID = new PublicKey("2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ");
+export const PROGRAM_ID = new PublicKey("D8uK7oT6f1pcZzK2Dq1NhL7wdNp51sS5ZhuNy4wf8WYD");
 
 export interface OnChainProvider {
   pda: string;
   wallet: string;
-  bondUsdc: number;
-  lockedUsdc: number;
+  bondSol: number;
+  lockedSol: number;
   withdrawRequestedAt: number;
   specHashHex: string;
   openDisputes: number;
   disputesBuyerWon: number;
   disputesProviderWon: number;
   disputesTimedOut: number;
-  totalSlashedUsdc: number;
+  totalSlashedSol: number;
 }
 
 export interface OnChainDispute {
@@ -22,9 +22,9 @@ export interface OnChainDispute {
   buyer: string;
   provider: string;
   specHashHex: string;
-  priceUsdc: number;
-  claimAmountUsdc: number;
-  depositAmountUsdc: number;
+  priceSol: number;
+  claimAmountSol: number;
+  depositAmountSol: number;
   status: "Open" | "BuyerWins" | "ProviderWins" | "TimedOut";
   openedAt: number;
   evidenceHashHex: string;
@@ -76,15 +76,15 @@ export async function fetchOnChainState(rpcUrl: string): Promise<{
     return {
       pda: pubkey.toBase58(),
       wallet: new PublicKey(d.subarray(8, 40)).toBase58(),
-      bondUsdc: readU64LE(d, 40) / 1_000_000,
-      lockedUsdc: readU64LE(d, 48) / 1_000_000,
+      bondSol: readU64LE(d, 40) / 1_000_000_000,
+      lockedSol: readU64LE(d, 48) / 1_000_000_000,
       withdrawRequestedAt: readI64LE(d, 56),
       specHashHex: toHex(d.subarray(64, 96)),
       openDisputes: readU64LE(d, 96),
       disputesBuyerWon: readU64LE(d, 104),
       disputesProviderWon: readU64LE(d, 112),
       disputesTimedOut: readU64LE(d, 120),
-      totalSlashedUsdc: readU64LE(d, 128) / 1_000_000,
+      totalSlashedSol: readU64LE(d, 128) / 1_000_000_000,
     };
   });
 
@@ -97,9 +97,9 @@ export async function fetchOnChainState(rpcUrl: string): Promise<{
       buyer: new PublicKey(d.subarray(40, 72)).toBase58(),
       provider: new PublicKey(d.subarray(72, 104)).toBase58(),
       specHashHex: toHex(d.subarray(104, 136)),
-      priceUsdc: readU64LE(d, 136) / 1_000_000,
-      claimAmountUsdc: readU64LE(d, 144) / 1_000_000,
-      depositAmountUsdc: readU64LE(d, 152) / 1_000_000,
+      priceSol: readU64LE(d, 136) / 1_000_000_000,
+      claimAmountSol: readU64LE(d, 144) / 1_000_000_000,
+      depositAmountSol: readU64LE(d, 152) / 1_000_000_000,
       status: DISPUTE_STATUSES[statusIdx] || "Open",
       openedAt: readI64LE(d, 161),
       evidenceHashHex: toHex(d.subarray(169, 201)),

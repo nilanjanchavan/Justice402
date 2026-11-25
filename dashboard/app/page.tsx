@@ -127,16 +127,16 @@ export default function DashboardPage() {
     loadLiveState(nextRpc);
   };
 
-  const programIdStr = demoData.programId || PROGRAM_ID.toBase58();
+  const programIdStr = PROGRAM_ID.toBase58();
   const hasLiveProviders = onChainProviders.length > 0;
   const hasLiveDisputes = onChainDisputes.length > 0;
 
-  const totalStakedUsdc = hasLiveProviders
-    ? onChainProviders.reduce((acc, p) => acc + p.bondUsdc, 0)
-    : 195.0;
-  const totalSlashedUsdc = hasLiveProviders
-    ? onChainProviders.reduce((acc, p) => acc + p.totalSlashedUsdc, 0)
-    : 5.0;
+  const totalStakedSol = hasLiveProviders
+    ? onChainProviders.reduce((acc, p) => acc + p.bondSol, 0)
+    : 0.15;
+  const totalSlashedSol = hasLiveProviders
+    ? onChainProviders.reduce((acc, p) => acc + p.totalSlashedSol, 0)
+    : 0.01;
   const providerCount = hasLiveProviders ? onChainProviders.length : 2;
   const disputeCount = hasLiveDisputes ? onChainDisputes.length : 1;
 
@@ -243,8 +243,8 @@ export default function DashboardPage() {
           <div className="p-4 sm:p-5">
             <span className="text-xs text-zinc-400 block mb-1">Total Bond Staked</span>
             <span className="font-display text-2xl font-semibold text-white tabular-nums">
-              {totalStakedUsdc.toFixed(2)}{" "}
-              <span className="text-xs font-mono font-normal text-zinc-400">USDC</span>
+              {totalStakedSol.toFixed(4)}{" "}
+              <span className="text-xs font-mono font-normal text-zinc-400">SOL</span>
             </span>
           </div>
           <div className="p-4 sm:p-5">
@@ -268,8 +268,8 @@ export default function DashboardPage() {
           <div className="p-4 sm:p-5">
             <span className="text-xs text-zinc-400 block mb-1">Total Bond Slashed</span>
             <span className="font-display text-2xl font-semibold text-rose-300 tabular-nums">
-              {totalSlashedUsdc.toFixed(2)}{" "}
-              <span className="text-xs font-mono font-normal text-rose-300/70">USDC</span>
+              {totalSlashedSol.toFixed(4)}{" "}
+              <span className="text-xs font-mono font-normal text-rose-300/70">SOL</span>
             </span>
           </div>
         </section>
@@ -506,7 +506,7 @@ export default function DashboardPage() {
               {hasLiveProviders ? (
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                   {onChainProviders.map((p) => {
-                    const isSlashed = p.disputesBuyerWon > 0 || p.totalSlashedUsdc > 0;
+                    const isSlashed = p.disputesBuyerWon > 0 || p.totalSlashedSol > 0;
                     const totalResolved = p.disputesBuyerWon + p.disputesProviderWon;
                     const lossRate =
                       totalResolved > 0
@@ -544,13 +544,13 @@ export default function DashboardPage() {
                           <div>
                             <span className="text-zinc-500 block mb-0.5">Staked Bond</span>
                             <span className="text-white font-medium text-sm tabular-nums">
-                              {p.bondUsdc.toFixed(2)} USDC
+                              {p.bondSol.toFixed(4)} SOL
                             </span>
                           </div>
                           <div>
                             <span className="text-zinc-500 block mb-0.5">Locked / Open</span>
                             <span className="text-zinc-200 font-medium text-sm tabular-nums">
-                              {p.lockedUsdc.toFixed(2)} USDC ({p.openDisputes})
+                              {p.lockedSol.toFixed(4)} SOL ({p.openDisputes})
                             </span>
                           </div>
                           <div>
@@ -560,7 +560,7 @@ export default function DashboardPage() {
                                 isSlashed ? "text-rose-300" : "text-emerald-300"
                               }`}
                             >
-                              {p.disputesBuyerWon} ({p.totalSlashedUsdc.toFixed(2)} USDC)
+                              {p.disputesBuyerWon} ({p.totalSlashedSol.toFixed(4)} SOL)
                             </span>
                           </div>
                           <div>
@@ -699,8 +699,8 @@ export default function DashboardPage() {
                               <CopyButton value={d.pda} label="dispute PDA" />
                             </span>
                           </th>
-                          <td className="p-4 tabular-nums text-zinc-300">{d.claimAmountUsdc.toFixed(2)} USDC</td>
-                          <td className="p-4 tabular-nums text-zinc-300">{d.depositAmountUsdc.toFixed(2)} USDC</td>
+                          <td className="p-4 tabular-nums text-zinc-300">{d.claimAmountSol.toFixed(4)} SOL</td>
+                          <td className="p-4 tabular-nums text-zinc-300">{d.depositAmountSol.toFixed(4)} SOL</td>
                           <td className="p-4">
                             <span
                               className={`text-xs ${
@@ -720,10 +720,10 @@ export default function DashboardPage() {
                           </td>
                           <td className="p-4 text-white font-medium tabular-nums">
                             {d.status === "BuyerWins" || d.status === "TimedOut"
-                              ? `${(d.claimAmountUsdc + d.depositAmountUsdc).toFixed(2)} USDC (Claim + Deposit)`
+                              ? `${(d.claimAmountSol + d.depositAmountSol).toFixed(4)} SOL (Claim + Deposit)`
                               : d.status === "Open"
                               ? "Pending Arbiter"
-                              : "0.00 USDC (Deposit Forfeited)"}
+                              : "0.0000 SOL (Deposit Forfeited)"}
                           </td>
                         </tr>
                       ))

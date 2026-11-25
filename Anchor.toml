@@ -6,18 +6,22 @@ package_manager = "npm"
 resolution = true
 skip-lint = false
 
-[programs.localnet]
-justice402 = "2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ"
-
 [programs.devnet]
 justice402 = "2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ"
+
+[programs.localnet]
+justice402 = "D8uK7oT6f1pcZzK2Dq1NhL7wdNp51sS5ZhuNy4wf8WYD"
 
 [provider]
 cluster = "localnet"
 wallet = "./id.json"
 
-[test]
-startup_wait = 10000
-
 [scripts]
 test = "npm run test && npm run test:verifier && npm run test:integration && npm run test:e2e"
+
+[hooks]
+
+[test]
+startup_wait = 10000
+shutdown_wait = 2000
+upgradeable = false

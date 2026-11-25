@@ -8,9 +8,9 @@
 
 - **Live Dashboard**: [https://justice402-dashboard.vercel.app](https://justice402-dashboard.vercel.app) *(Placeholder)*
 - **Hosted Provider API**: [https://api.justice402.dev](https://api.justice402.dev) *(Placeholder)*
-- **Solana Devnet Program**: [`2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ`](https://explorer.solana.com/address/2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ?cluster=devnet) *(Program ID generated; deployment pending devnet SOL funding)*
+- **Solana Devnet Program**: [`D8uK7oT6f1pcZzK2Dq1NhL7wdNp51sS5ZhuNy4wf8WYD`](https://explorer.solana.com/address/D8uK7oT6f1pcZzK2Dq1NhL7wdNp51sS5ZhuNy4wf8WYD?cluster=devnet) *(Live on Solana Devnet, settled in Wrapped SOL)*
 - **GitHub Repository**: [https://github.com/nilanjanchavan/Justice402](https://github.com/nilanjanchavan/Justice402)
-- **Sample Demo Run Trace**: [`docs/DEMO_RUN.sample.md`](docs/DEMO_RUN.sample.md) & [`docs/demo-run.sample.json`](docs/demo-run.sample.json) *(Live devnet broadcast run pending wallet funding)*
+- **Live Devnet Demo Run Proof**: [`docs/DEMO_RUN.md`](docs/DEMO_RUN.md) & [`docs/demo-run.json`](docs/demo-run.json)
 
 ---
 

@@ -27,6 +27,7 @@ export interface ProviderAppOptions {
   priceLamports?: number | BN;
   allowedOrigin?: string;
   maxRequestsPerMinute?: number;
+  nowFn?: () => number;
 }
 
 export function createProviderApp(options: ProviderAppOptions): express.Application {
@@ -141,7 +142,7 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
       responseHash,
       paymentReference: Buffer.alloc(64, 0),
       price: new BN(priceLamports.toString()),
-      timestamp: Math.floor(Date.now() / 1000),
+      timestamp: options.nowFn ? options.nowFn() : Math.floor(Date.now() / 1000),
       nonce: ++nonceCounter,
     };
 
