@@ -237,7 +237,7 @@ async function main() {
   const POLL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes timeout
 
   while (Date.now() - pollStart < POLL_TIMEOUT_MS) {
-    const dAccount: any = await program.account.dispute.fetchNullable(disputePda);
+    const dAccount: any = await (program.account as any).dispute.fetchNullable(disputePda);
     if (dAccount && !dAccount.status.open) {
       if (dAccount.status.buyerWins) resolvedStatus = "BuyerWins";
       else if (dAccount.status.providerWins) resolvedStatus = "ProviderWins";
@@ -270,7 +270,7 @@ async function main() {
   // STEP 5: Buyer Refund & Bond Verification
   // ==========================================
   console.log("\n[STEP 5] Verifying Buyer Refund & Provider Bond on Devnet...");
-  const lyingProviderData: any = await program.account.provider.fetch(getProviderPda(programId, lyingKp.publicKey)[0]);
+  const lyingProviderData: any = await (program.account as any).provider.fetch(getProviderPda(programId, lyingKp.publicKey)[0]);
   console.log(`  Lying Provider Remaining Bond: ${lyingProviderData.bond.toString()} units`);
   console.log(`  Total Slashed to Date:         ${lyingProviderData.totalSlashed.toString()} units`);
   console.log(`  Losses (Disputes Buyer Won):   ${lyingProviderData.disputesBuyerWon.toString()}`);
@@ -335,3 +335,4 @@ main().catch((err) => {
   console.error("Demo Run Error:", err.message || err);
   process.exit(1);
 });
+

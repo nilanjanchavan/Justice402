@@ -3,12 +3,110 @@
 @tailwind utilities;
 
 :root {
-  --background: #0a0b0e;
-  --foreground: #ededed;
+  color-scheme: dark;
+  --background: #090b0f;
+  --foreground: #f4f4f5;
+  --scrollbar-track: #0d1017;
+  --scrollbar-thumb: #3f3f46;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+@supports not (scrollbar-color: auto) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 5px;
+  }
 }
 
 body {
   color: var(--foreground);
   background: var(--background);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-image: radial-gradient(
+    ellipse 70% 40% at 50% -15%,
+    rgba(16, 185, 129, 0.08),
+    transparent
+  );
+  background-attachment: fixed;
+}
+
+/* Tab underline indicator (non-color indicator for WCAG 1.4.1 & forced-colors) */
+[role="tab"] {
+  position: relative;
+}
+
+[role="tab"][aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  inset: auto 0.5rem -1px;
+  border-block-end: 2px solid #34d399;
+}
+
+/* Responsive accessible table container */
+.table-wrapper {
+  overflow: auto;
+  max-inline-size: 100%;
+  container-type: inline-size;
+}
+
+.table-wrapper table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.table-wrapper thead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+}
+
+@container (width < 600px) {
+  .disputes-table,
+  .disputes-table thead,
+  .disputes-table tbody,
+  .disputes-table tr,
+  .disputes-table th,
+  .disputes-table td {
+    display: block;
+  }
+
+  .disputes-table thead {
+    display: none;
+  }
+
+  .disputes-table tr {
+    padding: 0.875rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .disputes-table td {
+    padding: 0.25rem 0 !important;
+  }
+
+  .disputes-table td:nth-child(1)::before {
+    content: "Dispute PDA: ";
+    color: #a1a1aa;
+  }
+  .disputes-table td:nth-child(2)::before {
+    content: "Claim: ";
+    color: #a1a1aa;
+  }
+  .disputes-table td:nth-child(3)::before {
+    content: "Deposit: ";
+    color: #a1a1aa;
+  }
+  .disputes-table td:nth-child(4)::before {
+    content: "Status: ";
+    color: #a1a1aa;
+  }
+  .disputes-table td:nth-child(5)::before {
+    content: "Payout: ";
+    color: #a1a1aa;
+  }
 }

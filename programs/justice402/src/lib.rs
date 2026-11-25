@@ -10,7 +10,7 @@ pub use events::*;
 pub use instructions::*;
 pub use state::*;
 
-declare_id!("2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ");
+declare_id!("D8uK7oT6f1pcZzK2Dq1NhL7wdNp51sS5ZhuNy4wf8WYD");
 
 #[program]
 pub mod justice402 {

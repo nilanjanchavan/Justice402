@@ -1,9 +1,18 @@
 import type { Metadata } from "next";
+import "@fontsource/inter/400.css";
+import "@fontsource/inter/500.css";
+import "@fontsource/inter/600.css";
+import "@fontsource/space-grotesk/600.css";
+import "@fontsource/space-grotesk/700.css";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
+import "@fontsource/jetbrains-mono/600.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Justice402 — Insurance for x402 Payments on Solana",
-  description: "Devnet accountability and insurance layer for HTTP x402 payment-required APIs on Solana.",
+  description:
+    "On-chain accountability and insurance layer for HTTP x402 payment-required APIs on Solana.",
 };
 
 export default function RootLayout({
@@ -13,11 +22,14 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-slate-950 text-slate-100 antialiased">
-        {/* Persistent Devnet Notice Banner */}
-        <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2 text-center text-xs sm:text-sm font-semibold tracking-wide text-amber-300 flex items-center justify-center gap-2">
-          <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-          DEVNET DEMO, NO REAL FUNDS — Solved for Solana Devnet & x402 V2 Specifications
+      <head>
+        <meta name="color-scheme" content="dark" />
+      </head>
+      <body className="min-h-screen font-sans text-zinc-100 antialiased selection:bg-emerald-500/30 selection:text-emerald-200">
+        {/* Persistent Demo Notice Banner */}
+        <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-1.5 text-center text-[11px] font-mono tracking-wide text-amber-200/90 flex items-center justify-center gap-2">
+          <span aria-hidden="true" className="text-amber-400">●</span>
+          <span>DEVNET / LOCALNET DEMO — NO REAL FUNDS AT RISK</span>
         </div>
         {children}
       </body>

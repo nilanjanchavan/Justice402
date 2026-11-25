@@ -5,7 +5,7 @@
  * IDL can be found at `target/idl/justice402.json`.
  */
 export type Justice402 = {
-  "address": "2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ",
+  "address": "D8uK7oT6f1pcZzK2Dq1NhL7wdNp51sS5ZhuNy4wf8WYD",
   "metadata": {
     "name": "justice402",
     "version": "0.1.0",

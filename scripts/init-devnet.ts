@@ -74,16 +74,16 @@ async function main() {
   }
 
   // Program and PDAs
-  const programId = new PublicKey(process.env.PROGRAM_ID || idl.address || "2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ");
+  const programId = new PublicKey(process.env.PROGRAM_ID || idl.address || "D8uK7oT6f1pcZzK2Dq1NhL7wdNp51sS5ZhuNy4wf8WYD");
   const [configPda] = getConfigPda(programId);
   const [vaultPda] = getVaultPda(programId, configPda);
   console.log("Program ID:    ", programId.toBase58());
   console.log("Config PDA:    ", configPda.toBase58());
   console.log("Vault PDA:     ", vaultPda.toBase58());
 
-  // USDC Mint
-  const usdcMint = new PublicKey(process.env.USDC_MINT || "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
-  console.log("USDC Mint:     ", usdcMint.toBase58());
+  // Settlement Mint (Wrapped SOL by default)
+  const usdcMint = new PublicKey(process.env.USDC_MINT || "So11111111111111111111111111111111111111112");
+  console.log("Settlement Mint:", usdcMint.toBase58());
   console.log("--------------------------------------------------");
 
   const wallet = new anchor.Wallet(adminKeypair);
@@ -94,7 +94,7 @@ async function main() {
   const existingConfig = await connection.getAccountInfo(configPda);
   if (existingConfig) {
     console.log("[IDEMPOTENT] Program Config is ALREADY initialized on devnet!");
-    const configData: any = await program.account.config.fetch(configPda);
+    const configData: any = await (program.account as any).config.fetch(configPda);
     console.log("Current Configuration on Devnet:");
     console.log(`  Arbiter:                     ${configData.arbiter.toBase58()}`);
     console.log(`  USDC Mint:                   ${configData.usdcMint.toBase58()}`);
@@ -108,13 +108,13 @@ async function main() {
     return;
   }
 
-  // Initialize Config
+  // Initialize Config (lamports: 9 decimals for wSOL)
   console.log("Config not found. Initializing Config PDA on devnet...");
   const disputeWindow = new anchor.BN(300);              // 5 minutes
   const resolveTimeout = new anchor.BN(180);             // 3 minutes
   const withdrawDelay = new anchor.BN(60);               // 1 minute
-  const perRulingPayoutCap = new anchor.BN(50_000_000);  // 50 USDC (6 decimals)
-  const disputeDeposit = new anchor.BN(1_000_000);       // 1 USDC
+  const perRulingPayoutCap = new anchor.BN(50_000_000);  // 0.05 SOL
+  const disputeDeposit = new anchor.BN(10_000_000);      // 0.01 SOL
   const maxOpenDisputesPerBuyer = 3;
 
   const txSig = await program.methods
@@ -147,3 +147,4 @@ main().catch((err) => {
   console.error("Initialization Failed:", err.message || err);
   process.exit(1);
 });
+

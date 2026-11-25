@@ -62,3 +62,4 @@ CMD ["npm", "run", "start:provider"]
 - **Zero Key Logging**: Private keys and secret bytes are never logged or exposed in HTTP responses.
 - **Rate Limiting**: Integrated sliding-window limiter rejects traffic exceeding 60 req/min per IP with HTTP `429 Too Many Requests`.
 - **CORS Protection**: Access-Control headers are locked down to the configured dashboard domain.
+

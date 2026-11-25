@@ -2,8 +2,10 @@ import * as anchor from "@anchor-lang/core";
 import { PublicKey, Keypair, Connection, SystemProgram } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
+  NATIVE_MINT,
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountInstruction,
+  createSyncNativeInstruction,
 } from "@solana/spl-token";
 import fs from "fs";
 import path from "path";
@@ -54,10 +56,10 @@ async function main() {
   console.log("Admin Wallet:  ", adminKeypair.publicKey.toBase58());
 
   // Program & Config
-  const programId = new PublicKey(process.env.PROGRAM_ID || idl.address || "2kqYmJMLeSUQ9pgwpJuewNhjr4CMkw3dE9phTpFKNJoJ");
+  const programId = new PublicKey(process.env.PROGRAM_ID || idl.address || "D8uK7oT6f1pcZzK2Dq1NhL7wdNp51sS5ZhuNy4wf8WYD");
   const [configPda] = getConfigPda(programId);
   const [vaultPda] = getVaultPda(programId, configPda);
-  const usdcMint = new PublicKey(process.env.USDC_MINT || "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+  const usdcMint = new PublicKey(process.env.USDC_MINT || NATIVE_MINT.toBase58());
 
   const wallet = new anchor.Wallet(adminKeypair);
   const provider = new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" });
@@ -109,7 +111,7 @@ async function main() {
     const existingProvider = await connection.getAccountInfo(pPda);
     if (existingProvider) {
       console.log(`  Status:       ALREADY REGISTERED (Idempotent)`);
-      const providerData: any = await program.account.provider.fetch(pPda);
+      const providerData: any = await (program.account as any).provider.fetch(pPda);
       console.log(`  Current Bond: ${providerData.bond.toString()} units`);
       console.log(`  Locked:       ${providerData.locked.toString()} units`);
       console.log(`  Spec Hash:    ${Buffer.from(providerData.specHash).toString("hex")}`);
@@ -129,33 +131,49 @@ async function main() {
 
       // 1. Ensure Provider has SOL for tx fee
       const balance = await connection.getBalance(p.keypair.publicKey);
-      if (balance < 0.05 * anchor.web3.LAMPORTS_PER_SOL) {
-        console.log(`  Funding provider wallet with 0.1 SOL from admin...`);
+      if (balance < 0.1 * anchor.web3.LAMPORTS_PER_SOL) {
+        console.log(`  Funding provider wallet with 0.12 SOL from admin...`);
         const fundTx = new anchor.web3.Transaction().add(
           SystemProgram.transfer({
             fromPubkey: adminKeypair.publicKey,
             toPubkey: p.keypair.publicKey,
-            lamports: 0.1 * anchor.web3.LAMPORTS_PER_SOL,
+            lamports: 0.12 * anchor.web3.LAMPORTS_PER_SOL,
           })
         );
         await provider.sendAndConfirm(fundTx, [adminKeypair]);
       }
 
-      // 2. Ensure ATA exists
+      // 2. Ensure ATA exists & wrap 0.05 SOL if using NATIVE_MINT
+      const initialBondLamports = 50_000_000; // 0.05 SOL
+      const setupTx = new anchor.web3.Transaction();
       const ataInfo = await connection.getAccountInfo(ata);
       if (!ataInfo) {
-        const createAtaIx = createAssociatedTokenAccountInstruction(
-          adminKeypair.publicKey,
-          ata,
-          p.keypair.publicKey,
-          usdcMint
+        setupTx.add(
+          createAssociatedTokenAccountInstruction(
+            adminKeypair.publicKey,
+            ata,
+            p.keypair.publicKey,
+            usdcMint
+          )
         );
-        await provider.sendAndConfirm(new anchor.web3.Transaction().add(createAtaIx), [adminKeypair]);
+      }
+      if (usdcMint.equals(NATIVE_MINT)) {
+        setupTx.add(
+          SystemProgram.transfer({
+            fromPubkey: adminKeypair.publicKey,
+            toPubkey: ata,
+            lamports: initialBondLamports,
+          }),
+          createSyncNativeInstruction(ata)
+        );
+      }
+      if (setupTx.instructions.length > 0) {
+        await provider.sendAndConfirm(setupTx, [adminKeypair]);
       }
 
-      // 3. Register Provider with 0 initial deposit (can be topped up via faucet or pre-seeded balance)
+      // 3. Register Provider with 0.05 SOL initial bond
       const registerTx = await program.methods
-        .registerProvider(new anchor.BN(0), Array.from(SPEC_HASH))
+        .registerProvider(new anchor.BN(usdcMint.equals(NATIVE_MINT) ? initialBondLamports : 0), Array.from(SPEC_HASH))
         .accounts({
           providerWallet: p.keypair.publicKey,
           provider: pPda,
@@ -197,3 +215,4 @@ main().catch((err) => {
   console.error("Seeding Failed:", err.message || err);
   process.exit(1);
 });
+

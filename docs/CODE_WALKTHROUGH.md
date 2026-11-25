@@ -323,3 +323,4 @@ Justice402 manages five core account structures:
 | 22 | Spec hash mismatch | `open_dispute` | `receipt.spec_hash == provider.spec_hash` |
 | 23 | Premature timeout claim | `claim_timeout` | `now >= opened_at + resolve_timeout` |
 | 24 | Max open disputes cap | `open_dispute` | `buyer_record.open_disputes < cap` |
+
