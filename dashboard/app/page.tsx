@@ -1,6 +1,9 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useId } from "react";
+import dynamic from "next/dynamic";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { PublicKey } from "@solana/web3.js";
 import fallbackRunData from "../data/demo-run-fallback.json";
 import {
   fetchOnChainState,
@@ -8,6 +11,13 @@ import {
   OnChainProvider,
   PROGRAM_ID,
 } from "../lib/solana";
+import { buildClaimTimeoutTransaction } from "../lib/dispute-client";
+import { getDisputeEvidence, loadLiveRun, saveLiveRun } from "../lib/live-run";
+import { ToastProvider, useToast } from "../components/Toast";
+
+const WalletProvider = dynamic(() => import("../components/WalletProvider"), { ssr: false });
+const WalletButton = dynamic(() => import("../components/WalletButton"), { ssr: false });
+const PlaygroundTab = dynamic(() => import("../components/PlaygroundTab"), { ssr: false });
 
 interface StepRecord {
   step: number;
@@ -56,19 +66,30 @@ function CopyButton({ value, label }: { value: string; label?: string }) {
   );
 }
 
-export default function DashboardPage() {
+function DashboardInner({
+  rpcUrl,
+  setRpcUrl,
+}: {
+  rpcUrl: string;
+  setRpcUrl: (url: string) => void;
+}) {
   const [activeTab, setActiveTab] = useState<
-    "timeline" | "providers" | "disputes" | "architecture"
-  >("timeline");
+    "playground" | "timeline" | "providers" | "disputes" | "architecture"
+  >("playground");
   const [demoData, setDemoData] = useState<any>(fallbackRunData);
   const [isUsingFallback, setIsUsingFallback] = useState<boolean>(true);
 
-  const [rpcUrl, setRpcUrl] = useState<string>(DEFAULT_RPC_URL);
   const [onChainProviders, setOnChainProviders] = useState<OnChainProvider[]>([]);
   const [onChainDisputes, setOnChainDisputes] = useState<OnChainDispute[]>([]);
   const [chainLoading, setChainLoading] = useState<boolean>(false);
   const [chainError, setChainError] = useState<string | null>(null);
   const [providerHealth, setProviderHealth] = useState<ProviderHealth | null>(null);
+  const [resolvingPda, setResolvingPda] = useState<string | null>(null);
+  const [claimingPda, setClaimingPda] = useState<string | null>(null);
+
+  const { publicKey, connected, sendTransaction } = useWallet();
+  const { connection } = useConnection();
+  const { toast } = useToast();
 
   const tableCaptionId = useId();
   const isLocalhostRpc =
@@ -90,41 +111,122 @@ export default function DashboardPage() {
     }
   }, []);
 
-  useEffect(() => {
-    let initialRpc = DEFAULT_RPC_URL;
-    if (
-      typeof window !== "undefined" &&
-      !process.env.NEXT_PUBLIC_SOLANA_RPC_URL &&
-      (window.location.hostname === "localhost" ||
-        window.location.hostname === "127.0.0.1")
-    ) {
-      initialRpc = "http://127.0.0.1:8899";
-      setRpcUrl(initialRpc);
-    }
-
-    fetch("/demo-run.json")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data && data.steps && data.isSample !== true) {
-          setDemoData(data);
-          setIsUsingFallback(false);
-        }
-      })
-      .catch(() => {});
-
+  const refreshHealth = useCallback(() => {
     fetch(`${DEFAULT_PROVIDER_URL}/health`)
       .then((res) => (res.ok ? res.json() : null))
       .then((h) => {
         if (h && h.status === "ok") setProviderHealth(h);
       })
       .catch(() => setProviderHealth(null));
+  }, []);
 
-    loadLiveState(initialRpc);
-  }, [loadLiveState]);
+  useEffect(() => {
+    const cachedLiveRun = loadLiveRun();
+    if (cachedLiveRun && cachedLiveRun.steps) {
+      setDemoData(cachedLiveRun);
+      setIsUsingFallback(false);
+    } else {
+      fetch("/demo-run.json")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data && data.steps && data.isSample !== true) {
+            setDemoData(data);
+            setIsUsingFallback(false);
+          }
+        })
+        .catch(() => {});
+    }
+
+    refreshHealth();
+    loadLiveState(rpcUrl);
+  }, [loadLiveState, refreshHealth, rpcUrl]);
 
   const handleClusterSwitch = (nextRpc: string) => {
     setRpcUrl(nextRpc);
     loadLiveState(nextRpc);
+  };
+
+  const handleFullRefresh = useCallback(() => {
+    loadLiveState(rpcUrl);
+    refreshHealth();
+  }, [loadLiveState, refreshHealth, rpcUrl]);
+
+  const handleRunUpdate = useCallback((runObj: any) => {
+    setDemoData(runObj);
+    setIsUsingFallback(false);
+    saveLiveRun(runObj);
+  }, []);
+
+  const handleDisputeTabArbiterResolve = async (dispute: OnChainDispute) => {
+    setResolvingPda(dispute.pda);
+    try {
+      const evidence = getDisputeEvidence(dispute.pda);
+      const res = await fetch(`${DEFAULT_PROVIDER_URL}/arbiter/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          disputePda: dispute.pda,
+          responsePayload: evidence?.responsePayload,
+          receiptBase64: evidence?.receiptBase64,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `Arbiter returned HTTP ${res.status}`);
+      }
+      toast({
+        type: data.ruling === "BuyerWins" ? "success" : "info",
+        text: `Arbiter resolved ${dispute.pda.slice(0, 6)}… -> ${data.ruling}`,
+        link: data.explorerUrl ? { label: "Explorer", href: data.explorerUrl } : undefined,
+      });
+      handleFullRefresh();
+    } catch (err: any) {
+      toast({ type: "error", text: `Arbiter error: ${err?.message || err}` });
+    } finally {
+      setResolvingPda(null);
+    }
+  };
+
+  const handleClaimTimeout = async (dispute: OnChainDispute) => {
+    if (!connected || !publicKey) {
+      toast({ type: "info", text: "Connect a wallet first to claim timeout refund." });
+      return;
+    }
+    setClaimingPda(dispute.pda);
+    try {
+      const tx = await buildClaimTimeoutTransaction({
+        connection,
+        callerPubkey: publicKey,
+        disputePda: new PublicKey(dispute.pda),
+        providerWallet: new PublicKey(dispute.provider),
+        buyerWallet: new PublicKey(dispute.buyer),
+      });
+      const sig = await sendTransaction(tx, connection);
+      await connection.confirmTransaction(
+        {
+          signature: sig,
+          blockhash: tx.recentBlockhash!,
+          lastValidBlockHeight: tx.lastValidBlockHeight!,
+        },
+        "confirmed"
+      );
+      toast({
+        type: "success",
+        text: "Timeout refund settled on Solana!",
+        link: { label: "Explorer", href: explorerTxUrl(sig) },
+      });
+      handleFullRefresh();
+    } catch (err: any) {
+      const msg = err?.message || "Claim timeout failed";
+      toast({
+        type: "error",
+        text: msg.includes("TimeoutNotReached")
+          ? "Resolve timeout (180s) has not elapsed yet — use Request Arbiter Ruling."
+          : msg,
+      });
+    } finally {
+      setClaimingPda(null);
+    }
   };
 
   const programIdStr = PROGRAM_ID.toBase58();
@@ -137,7 +239,7 @@ export default function DashboardPage() {
   const totalSlashedSol = hasLiveProviders
     ? onChainProviders.reduce((acc, p) => acc + p.totalSlashedSol, 0)
     : 0.01;
-  const providerCount = hasLiveProviders ? onChainProviders.length : 2;
+  const providerCount = hasLiveProviders ? onChainProviders.length : 3;
   const disputeCount = hasLiveDisputes ? onChainDisputes.length : 1;
 
   const explorerTxUrl = (sig: string, explicitUrl?: string) => {
@@ -148,6 +250,7 @@ export default function DashboardPage() {
   };
 
   const tabs = [
+    { id: "playground", label: "⚡ Live x402 Playground" },
     { id: "timeline", label: "Execution Timeline" },
     {
       id: "providers",
@@ -159,6 +262,8 @@ export default function DashboardPage() {
     },
     { id: "architecture", label: "Architecture" },
   ] as const;
+
+  const nowUnix = Math.floor(Date.now() / 1000);
 
   return (
     <div className="w-full min-h-screen flex flex-col">
@@ -223,9 +328,13 @@ export default function DashboardPage() {
             <span>API {providerHealth ? "Online" : "Offline"}</span>
           </span>
 
+          <span className="text-zinc-700" aria-hidden="true">|</span>
+
+          <WalletButton />
+
           <button
             type="button"
-            onClick={() => loadLiveState(rpcUrl)}
+            onClick={handleFullRefresh}
             className="ml-1 px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-white/10 text-zinc-200 transition-colors"
             title="Refresh on-chain accounts"
           >
@@ -300,15 +409,29 @@ export default function DashboardPage() {
                 aria-selected={selected}
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex-none px-2 py-2.5 text-sm font-medium transition-colors whitespace-nowrap ${
-                  selected
-                    ? "text-white"
-                    : "text-zinc-400 hover:text-zinc-200"
+                  selected ? "text-white" : "text-zinc-400 hover:text-zinc-200"
                 }`}
               >
                 {tab.label}
               </button>
             );
           })}
+        </div>
+
+        {/* TAB 0: LIVE PLAYGROUND */}
+        <div
+          role="tabpanel"
+          aria-labelledby="tab-playground"
+          hidden={activeTab !== "playground"}
+        >
+          {activeTab === "playground" && (
+            <PlaygroundTab
+              onRefresh={handleFullRefresh}
+              onRunUpdate={handleRunUpdate}
+              onChainProviders={onChainProviders}
+              isLocalhostRpc={isLocalhostRpc}
+            />
+          )}
         </div>
 
         {/* TAB 1: EXECUTION TIMELINE (2-column widescreen layout) */}
@@ -319,12 +442,11 @@ export default function DashboardPage() {
         >
           {activeTab === "timeline" && (
             <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* Left: Step Trace */}
               <div className="lg:col-span-8 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
                   <p className="text-xs font-mono text-zinc-400">
                     {isUsingFallback
-                      ? "Trace source: Sample fallback data (pending live devnet run)"
+                      ? "Trace source: Sample fallback data (run Live Playground to record a live trace)"
                       : `Trace source: ${demoData.network} · ${new Date(demoData.executedAt).toLocaleString()}`}
                   </p>
                   <span
@@ -348,8 +470,12 @@ export default function DashboardPage() {
                             {s.title}
                           </h3>
                         </div>
-                        <span className="font-mono text-xs text-emerald-300">
-                          ✓ {s.status}
+                        <span
+                          className={`font-mono text-xs ${
+                            s.status === "VIOLATION_DETECTED" ? "text-rose-300" : "text-emerald-300"
+                          }`}
+                        >
+                          {s.status === "VIOLATION_DETECTED" ? "✕ VIOLATION" : `✓ ${s.status}`}
                         </span>
                       </div>
 
@@ -400,7 +526,6 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              {/* Right: Live Environment & Spec Inspector */}
               <aside className="lg:col-span-4 space-y-4 lg:sticky lg:top-6">
                 <div className="bg-zinc-900/50 border border-white/10 rounded-xl p-5 space-y-4">
                   <h2 className="font-display text-sm font-semibold text-white">
@@ -420,7 +545,7 @@ export default function DashboardPage() {
                     </div>
                     {demoData.buyer && (
                       <div className="flex items-center justify-between gap-2">
-                        <dt className="text-zinc-500">Demo Buyer</dt>
+                        <dt className="text-zinc-500">Last Buyer</dt>
                         <dd className="flex items-center gap-1.5 text-zinc-200">
                           <span>{demoData.buyer.slice(0, 6)}…{demoData.buyer.slice(-4)}</span>
                           <CopyButton value={demoData.buyer} label="buyer wallet" />
@@ -482,7 +607,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* TAB 2: PROVIDERS (Full-width multi-column grid) */}
+        {/* TAB 2: PROVIDERS */}
         <div
           role="tabpanel"
           aria-labelledby="tab-providers"
@@ -575,81 +700,15 @@ export default function DashboardPage() {
                   })}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                  <div className="bg-zinc-900/40 border border-white/10 rounded-xl p-5 sm:p-6">
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                      <div>
-                        <div className="font-display font-semibold text-white">
-                          Honest Weather Service (Sample)
-                        </div>
-                        <div className="font-mono text-xs text-zinc-400">
-                          /weather · Spec compliant
-                        </div>
-                      </div>
-                      <span className="text-xs font-mono text-emerald-300">
-                        ✓ Trusted (0 losses)
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-mono pt-3 border-t border-white/[0.06]">
-                      <div>
-                        <span className="text-zinc-500 block mb-0.5">Staked Bond</span>
-                        <span className="text-white font-medium text-sm">100.00 USDC</span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-500 block mb-0.5">Locked</span>
-                        <span className="text-zinc-200 font-medium text-sm">0.00 USDC</span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-500 block mb-0.5">Slashed</span>
-                        <span className="text-emerald-300 font-medium text-sm">0 (0.00 USDC)</span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-500 block mb-0.5">Spec Hash</span>
-                        <span className="text-zinc-300 truncate block">098199b4578…</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-zinc-900/40 border border-white/10 rounded-xl p-5 sm:p-6">
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                      <div>
-                        <div className="font-display font-semibold text-white">
-                          Lying Provider (Sample)
-                        </div>
-                        <div className="font-mono text-xs text-zinc-400">
-                          /weather-lying · Out-of-range responses
-                        </div>
-                      </div>
-                      <span className="text-xs font-mono text-rose-300">
-                        ✕ Slashed (100% loss)
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-mono pt-3 border-t border-white/[0.06]">
-                      <div>
-                        <span className="text-zinc-500 block mb-0.5">Remaining Bond</span>
-                        <span className="text-white font-medium text-sm">95.00 USDC</span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-500 block mb-0.5">Active Disputes</span>
-                        <span className="text-zinc-200 font-medium text-sm">0 Open</span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-500 block mb-0.5">Slashed</span>
-                        <span className="text-rose-300 font-medium text-sm">1 (5.00 USDC)</span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-500 block mb-0.5">Buyer Policy</span>
-                        <span className="text-rose-300 font-medium">Rejected</span>
-                      </div>
-                    </div>
-                  </div>
+                <div className="text-xs font-mono text-zinc-400 p-6 bg-zinc-900/40 border border-white/10 rounded-xl">
+                  Connect to Solana Devnet or click Refresh to inspect live registered providers.
                 </div>
               )}
             </section>
           )}
         </div>
 
-        {/* TAB 3: DISPUTES (Full-width table) */}
+        {/* TAB 3: DISPUTES */}
         <div
           role="tabpanel"
           aria-labelledby="tab-disputes"
@@ -659,7 +718,7 @@ export default function DashboardPage() {
             <section className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
                 <p className="text-xs font-mono text-zinc-400">
-                  1.00 USDC anti-griefing deposit required per dispute; payouts settle from provider bond
+                  0.0100 SOL anti-griefing deposit required per dispute; payouts settle from provider bond
                 </p>
                 <span
                   className={`text-xs font-mono ${
@@ -686,57 +745,87 @@ export default function DashboardPage() {
                       <th scope="col" className="p-4 font-medium">Claim</th>
                       <th scope="col" className="p-4 font-medium">Deposit</th>
                       <th scope="col" className="p-4 font-medium">Status</th>
-                      <th scope="col" className="p-4 font-medium">Resolution Payout</th>
+                      <th scope="col" className="p-4 font-medium">Resolution / Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/10">
                     {hasLiveDisputes ? (
-                      onChainDisputes.map((d) => (
-                        <tr key={d.pda} className="hover:bg-white/[0.02] transition-colors">
-                          <th scope="row" className="p-4 text-zinc-100 font-medium text-left">
-                            <span className="inline-flex items-center gap-2">
-                              <span>{d.pda}</span>
-                              <CopyButton value={d.pda} label="dispute PDA" />
-                            </span>
-                          </th>
-                          <td className="p-4 tabular-nums text-zinc-300">{d.claimAmountSol.toFixed(4)} SOL</td>
-                          <td className="p-4 tabular-nums text-zinc-300">{d.depositAmountSol.toFixed(4)} SOL</td>
-                          <td className="p-4">
-                            <span
-                              className={`text-xs ${
-                                d.status === "BuyerWins"
-                                  ? "text-emerald-300"
+                      onChainDisputes.map((d) => {
+                        const timedOut = d.status === "Open" && nowUnix >= d.openedAt + 180;
+                        return (
+                          <tr key={d.pda} className="hover:bg-white/[0.02] transition-colors">
+                            <th scope="row" className="p-4 text-zinc-100 font-medium text-left">
+                              <span className="inline-flex items-center gap-2">
+                                <span>{d.pda.slice(0, 8)}…{d.pda.slice(-6)}</span>
+                                <CopyButton value={d.pda} label="dispute PDA" />
+                              </span>
+                            </th>
+                            <td className="p-4 tabular-nums text-zinc-300">{d.claimAmountSol.toFixed(4)} SOL</td>
+                            <td className="p-4 tabular-nums text-zinc-300">{d.depositAmountSol.toFixed(4)} SOL</td>
+                            <td className="p-4">
+                              <span
+                                className={`text-xs ${
+                                  d.status === "BuyerWins"
+                                    ? "text-emerald-300"
+                                    : d.status === "Open"
+                                    ? "text-amber-300"
+                                    : "text-zinc-300"
+                                }`}
+                              >
+                                {d.status === "BuyerWins"
+                                  ? "✓ BuyerWins"
                                   : d.status === "Open"
-                                  ? "text-amber-300"
-                                  : "text-zinc-300"
-                              }`}
-                            >
-                              {d.status === "BuyerWins"
-                                ? "✓ BuyerWins"
-                                : d.status === "Open"
-                                ? "⧗ Open"
-                                : d.status}
-                            </span>
-                          </td>
-                          <td className="p-4 text-white font-medium tabular-nums">
-                            {d.status === "BuyerWins" || d.status === "TimedOut"
-                              ? `${(d.claimAmountSol + d.depositAmountSol).toFixed(4)} SOL (Claim + Deposit)`
-                              : d.status === "Open"
-                              ? "Pending Arbiter"
-                              : "0.0000 SOL (Deposit Forfeited)"}
-                          </td>
-                        </tr>
-                      ))
+                                  ? "⧗ Open"
+                                  : d.status}
+                              </span>
+                            </td>
+                            <td className="p-4 text-white font-medium tabular-nums">
+                              {d.status === "BuyerWins" || d.status === "TimedOut" ? (
+                                `${(d.claimAmountSol + d.depositAmountSol).toFixed(4)} SOL (Claim + Deposit)`
+                              ) : d.status === "Open" ? (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {!timedOut && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDisputeTabArbiterResolve(d)}
+                                      disabled={resolvingPda === d.pda}
+                                      className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs font-mono transition-colors disabled:opacity-50"
+                                    >
+                                      {resolvingPda === d.pda
+                                        ? "Auditing…"
+                                        : "⚖ Request Arbiter Ruling"}
+                                    </button>
+                                  )}
+                                  {timedOut && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleClaimTimeout(d)}
+                                      disabled={claimingPda === d.pda}
+                                      className="px-2.5 py-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-100 text-xs font-mono transition-colors disabled:opacity-50"
+                                    >
+                                      {claimingPda === d.pda
+                                        ? "Claiming…"
+                                        : "⏱ Claim Timeout Refund"}
+                                    </button>
+                                  )}
+                                </div>
+                              ) : (
+                                "0.0000 SOL (Deposit Forfeited)"
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
                     ) : (
                       <tr>
                         <th scope="row" className="p-4 text-zinc-100 font-medium text-left">
                           8vKYbW2Qo…jf98M (Sample)
                         </th>
-                        <td className="p-4 text-zinc-300">5.00 USDC</td>
-                        <td className="p-4 text-zinc-300">1.00 USDC</td>
+                        <td className="p-4 text-zinc-300">0.0100 SOL</td>
+                        <td className="p-4 text-zinc-300">0.0100 SOL</td>
                         <td className="p-4 text-emerald-300">✓ BuyerWins</td>
                         <td className="p-4 text-white font-medium">
-                          6.00 USDC (Claim + Deposit)
+                          0.0200 SOL (Claim + Deposit)
                         </td>
                       </tr>
                     )}
@@ -760,7 +849,7 @@ export default function DashboardPage() {
                   Why Justice402 is Insurance, Not Escrow
                 </h2>
                 <p className="leading-relaxed text-zinc-400 max-w-3xl">
-                  Traditional API escrow locks funds during HTTP execution, adding latency and custody risk. Justice402 preserves instant x402 V2 settlement: buyers pay directly, and providers back their service guarantees with an on-chain USDC bond.
+                  Traditional API escrow locks funds during HTTP execution, adding latency and custody risk. Justice402 preserves instant x402 V2 settlement: buyers pay directly, and providers back their service guarantees with an on-chain SOL bond.
                 </p>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-5 border-t border-white/10">
@@ -786,7 +875,7 @@ export default function DashboardPage() {
                     Human Arbiter & Timeout
                   </h3>
                   <p className="text-xs text-zinc-400 leading-relaxed">
-                    A human arbiter reviews evidence before signing rulings; permissionless timeouts protect buyers if the arbiter stalls.
+                    An arbiter reviews evidence against the committed spec before signing rulings; permissionless timeouts protect buyers if the arbiter stalls.
                   </p>
                 </div>
               </div>
@@ -795,5 +884,28 @@ export default function DashboardPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function DashboardPage() {
+  const [rpcUrl, setRpcUrl] = useState<string>(DEFAULT_RPC_URL);
+
+  useEffect(() => {
+    if (
+      typeof window !== "undefined" &&
+      !process.env.NEXT_PUBLIC_SOLANA_RPC_URL &&
+      (window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1")
+    ) {
+      setRpcUrl("http://127.0.0.1:8899");
+    }
+  }, []);
+
+  return (
+    <WalletProvider rpcUrl={rpcUrl}>
+      <ToastProvider>
+        <DashboardInner rpcUrl={rpcUrl} setRpcUrl={setRpcUrl} />
+      </ToastProvider>
+    </WalletProvider>
   );
 }
