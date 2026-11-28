@@ -1,23 +1,35 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useId } from "react";
+import React, { useState, useEffect, useCallback, useId, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import fallbackRunData from "../data/demo-run-fallback.json";
 import {
+  availableBondSol,
   fetchOnChainState,
+  isProviderInsured,
+  OnChainConfig,
   OnChainDispute,
   OnChainProvider,
   PROGRAM_ID,
 } from "../lib/solana";
-import { buildClaimTimeoutTransaction } from "../lib/dispute-client";
+import {
+  buildClaimTimeoutTransaction,
+  buildTopUpTransaction,
+} from "../lib/dispute-client";
+import {
+  mergeProvidersWithRegistry,
+  RegistryMetadata,
+} from "../lib/providers-config";
 import { getDisputeEvidence, loadLiveRun, saveLiveRun } from "../lib/live-run";
 import { ToastProvider, useToast } from "../components/Toast";
 
 const WalletProvider = dynamic(() => import("../components/WalletProvider"), { ssr: false });
 const WalletButton = dynamic(() => import("../components/WalletButton"), { ssr: false });
 const PlaygroundTab = dynamic(() => import("../components/PlaygroundTab"), { ssr: false });
+const RegisterProviderTab = dynamic(() => import("../components/RegisterProviderTab"), { ssr: false });
+const ArbiterTab = dynamic(() => import("../components/ArbiterTab"), { ssr: false });
 
 interface StepRecord {
   step: number;
@@ -74,18 +86,22 @@ function DashboardInner({
   setRpcUrl: (url: string) => void;
 }) {
   const [activeTab, setActiveTab] = useState<
-    "playground" | "timeline" | "providers" | "disputes" | "architecture"
+    "playground" | "register" | "timeline" | "providers" | "disputes" | "arbiter" | "architecture"
   >("playground");
   const [demoData, setDemoData] = useState<any>(fallbackRunData);
   const [isUsingFallback, setIsUsingFallback] = useState<boolean>(true);
 
   const [onChainProviders, setOnChainProviders] = useState<OnChainProvider[]>([]);
   const [onChainDisputes, setOnChainDisputes] = useState<OnChainDispute[]>([]);
+  const [onChainConfig, setOnChainConfig] = useState<OnChainConfig | null>(null);
+  const [registryEntries, setRegistryEntries] = useState<RegistryMetadata[]>([]);
   const [chainLoading, setChainLoading] = useState<boolean>(false);
   const [chainError, setChainError] = useState<string | null>(null);
   const [providerHealth, setProviderHealth] = useState<ProviderHealth | null>(null);
   const [resolvingPda, setResolvingPda] = useState<string | null>(null);
   const [claimingPda, setClaimingPda] = useState<string | null>(null);
+  const [topUpAmounts, setTopUpAmounts] = useState<Record<string, string>>({});
+  const [topUpLoadingWallet, setTopUpLoadingWallet] = useState<string | null>(null);
 
   const { publicKey, connected, sendTransaction } = useWallet();
   const { connection } = useConnection();
@@ -99,9 +115,10 @@ function DashboardInner({
     setChainLoading(true);
     setChainError(null);
     try {
-      const { providers, disputes } = await fetchOnChainState(targetRpc);
+      const { providers, disputes, config } = await fetchOnChainState(targetRpc);
       setOnChainProviders(providers);
       setOnChainDisputes(disputes);
+      setOnChainConfig(config);
     } catch (err: any) {
       setChainError(err?.message || "Unable to reach Solana RPC");
       setOnChainProviders([]);
@@ -111,13 +128,22 @@ function DashboardInner({
     }
   }, []);
 
-  const refreshHealth = useCallback(() => {
+  const refreshHealthAndRegistry = useCallback(() => {
     fetch(`${DEFAULT_PROVIDER_URL}/health`)
       .then((res) => (res.ok ? res.json() : null))
       .then((h) => {
         if (h && h.status === "ok") setProviderHealth(h);
       })
       .catch(() => setProviderHealth(null));
+
+    fetch(`${DEFAULT_PROVIDER_URL}/providers/registry`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && Array.isArray(data.providers)) {
+          setRegistryEntries(data.providers);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -137,9 +163,9 @@ function DashboardInner({
         .catch(() => {});
     }
 
-    refreshHealth();
+    refreshHealthAndRegistry();
     loadLiveState(rpcUrl);
-  }, [loadLiveState, refreshHealth, rpcUrl]);
+  }, [loadLiveState, refreshHealthAndRegistry, rpcUrl]);
 
   const handleClusterSwitch = (nextRpc: string) => {
     setRpcUrl(nextRpc);
@@ -148,14 +174,78 @@ function DashboardInner({
 
   const handleFullRefresh = useCallback(() => {
     loadLiveState(rpcUrl);
-    refreshHealth();
-  }, [loadLiveState, refreshHealth, rpcUrl]);
+    refreshHealthAndRegistry();
+  }, [loadLiveState, refreshHealthAndRegistry, rpcUrl]);
 
   const handleRunUpdate = useCallback((runObj: any) => {
     setDemoData(runObj);
     setIsUsingFallback(false);
     saveLiveRun(runObj);
   }, []);
+
+  const mergedProviders = useMemo(
+    () => mergeProvidersWithRegistry(onChainProviders, registryEntries),
+    [onChainProviders, registryEntries]
+  );
+
+  const explorerTxUrl = (sig: string, explicitUrl?: string) => {
+    if (isLocalhostRpc) {
+      return `https://explorer.solana.com/tx/${sig}?cluster=custom&customUrl=${encodeURIComponent("http://127.0.0.1:8899")}`;
+    }
+    return explicitUrl || `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
+  };
+
+  const handleTopUpBond = async (providerWallet: string) => {
+    if (!connected || !publicKey || publicKey.toBase58() !== providerWallet) {
+      toast({
+        type: "error",
+        text: "Connect the owning provider wallet to top up its bond.",
+      });
+      return;
+    }
+
+    const solAmount = parseFloat(topUpAmounts[providerWallet] || "0.05");
+    if (!Number.isFinite(solAmount) || solAmount <= 0) {
+      toast({ type: "error", text: "Enter a positive SOL amount to top up." });
+      return;
+    }
+
+    setTopUpLoadingWallet(providerWallet);
+    try {
+      const lamports = BigInt(Math.round(solAmount * 1_000_000_000));
+      const tx = await buildTopUpTransaction({
+        connection,
+        providerWallet: publicKey,
+        amountLamports: lamports,
+      });
+
+      const sig = await sendTransaction(tx, connection);
+      await connection.confirmTransaction(
+        {
+          signature: sig,
+          blockhash: tx.recentBlockhash!,
+          lastValidBlockHeight: tx.lastValidBlockHeight!,
+        },
+        "confirmed"
+      );
+
+      toast({
+        type: "success",
+        text: `Topped up bond by +${solAmount.toFixed(4)} SOL!`,
+        link: { label: "Explorer", href: explorerTxUrl(sig) },
+      });
+
+      handleFullRefresh();
+    } catch (err: any) {
+      const msg = err?.message || "Top-up failed";
+      toast({
+        type: msg.toLowerCase().includes("user rejected") ? "warning" : "error",
+        text: msg.toLowerCase().includes("user rejected") ? "Top-up cancelled." : msg,
+      });
+    } finally {
+      setTopUpLoadingWallet(null);
+    }
+  };
 
   const handleDisputeTabArbiterResolve = async (dispute: OnChainDispute) => {
     setResolvingPda(dispute.pda);
@@ -241,16 +331,11 @@ function DashboardInner({
     : 0.01;
   const providerCount = hasLiveProviders ? onChainProviders.length : 3;
   const disputeCount = hasLiveDisputes ? onChainDisputes.length : 1;
-
-  const explorerTxUrl = (sig: string, explicitUrl?: string) => {
-    if (isLocalhostRpc) {
-      return `https://explorer.solana.com/tx/${sig}?cluster=custom&customUrl=${encodeURIComponent("http://127.0.0.1:8899")}`;
-    }
-    return explicitUrl || `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
-  };
+  const openDisputeCount = onChainDisputes.filter((d) => d.status === "Open").length;
 
   const tabs = [
     { id: "playground", label: "⚡ Live x402 Playground" },
+    { id: "register", label: "+ Register Provider" },
     { id: "timeline", label: "Execution Timeline" },
     {
       id: "providers",
@@ -260,10 +345,15 @@ function DashboardInner({
       id: "disputes",
       label: `Disputes (${hasLiveDisputes ? onChainDisputes.length : "Sample"})`,
     },
+    {
+      id: "arbiter",
+      label: openDisputeCount > 0 ? `⚖ Arbiter (${openDisputeCount} Open)` : "⚖ Arbiter",
+    },
     { id: "architecture", label: "Architecture" },
   ] as const;
 
   const nowUnix = Math.floor(Date.now() / 1000);
+  const resolveTimeoutSec = onChainConfig?.resolveTimeoutSec || 180;
 
   return (
     <div className="w-full min-h-screen flex flex-col">
@@ -426,15 +516,32 @@ function DashboardInner({
         >
           {activeTab === "playground" && (
             <PlaygroundTab
+              providers={mergedProviders}
               onRefresh={handleFullRefresh}
               onRunUpdate={handleRunUpdate}
-              onChainProviders={onChainProviders}
+              onGoToProviders={() => setActiveTab("providers")}
               isLocalhostRpc={isLocalhostRpc}
             />
           )}
         </div>
 
-        {/* TAB 1: EXECUTION TIMELINE (2-column widescreen layout) */}
+        {/* TAB 1: REGISTER PROVIDER */}
+        <div
+          role="tabpanel"
+          aria-labelledby="tab-register"
+          hidden={activeTab !== "register"}
+        >
+          {activeTab === "register" && (
+            <RegisterProviderTab
+              onChainProviders={onChainProviders}
+              onRefresh={handleFullRefresh}
+              onGoToProviders={() => setActiveTab("providers")}
+              isLocalhostRpc={isLocalhostRpc}
+            />
+          )}
+        </div>
+
+        {/* TAB 2: EXECUTION TIMELINE */}
         <div
           role="tabpanel"
           aria-labelledby="tab-timeline"
@@ -607,7 +714,7 @@ function DashboardInner({
           )}
         </div>
 
-        {/* TAB 2: PROVIDERS */}
+        {/* TAB 3: PROVIDERS (Public + Top Up Bond + Under-Bonded Badges) */}
         <div
           role="tabpanel"
           aria-labelledby="tab-providers"
@@ -615,61 +722,81 @@ function DashboardInner({
         >
           {activeTab === "providers" && (
             <section className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-1">
                 <p className="text-xs font-mono text-zinc-400">
                   Registered provider bonds and immutable <code className="text-zinc-200">spec_hash</code> track records
                 </p>
-                <span
-                  className={`text-xs font-mono ${
-                    hasLiveProviders ? "text-emerald-300" : "text-amber-300"
-                  }`}
-                >
-                  {hasLiveProviders ? `✓ Live RPC (${onChainProviders.length})` : "⚠ Sample Data"}
-                </span>
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`text-xs font-mono ${
+                      hasLiveProviders ? "text-emerald-300" : "text-amber-300"
+                    }`}
+                  >
+                    {hasLiveProviders ? `✓ Live RPC (${onChainProviders.length})` : "⚠ Sample Data"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("register")}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-medium transition-colors"
+                  >
+                    + Register Provider
+                  </button>
+                </div>
               </div>
 
               {hasLiveProviders ? (
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                   {onChainProviders.map((p) => {
+                    const meta = mergedProviders.find((m) => m.wallet === p.wallet);
+                    const avail = availableBondSol(p);
+                    const insured = isProviderInsured(p);
                     const isSlashed = p.disputesBuyerWon > 0 || p.totalSlashedSol > 0;
-                    const totalResolved = p.disputesBuyerWon + p.disputesProviderWon;
-                    const lossRate =
-                      totalResolved > 0
-                        ? Math.round((p.disputesBuyerWon / totalResolved) * 100)
-                        : 0;
+                    const isOwner = connected && publicKey?.toBase58() === p.wallet;
+
                     return (
                       <div
                         key={p.pda}
-                        className="bg-zinc-900/40 border border-white/10 rounded-xl p-5 sm:p-6"
+                        className="bg-zinc-900/40 border border-white/10 rounded-xl p-5 sm:p-6 space-y-4"
                       >
-                        <div className="flex flex-wrap items-start justify-between gap-2 mb-4">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
                             <div className="min-w-0">
-                              <div className="font-mono text-sm font-medium text-white truncate">
+                              <div className="flex items-center gap-2">
+                                <span className="font-display text-sm font-semibold text-white truncate">
+                                  {meta?.name || `Provider ${p.wallet.slice(0, 6)}…`}
+                                </span>
+                                {isOwner && (
+                                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                                    Your Wallet
+                                  </span>
+                                )}
+                              </div>
+                              <div className="font-mono text-xs text-zinc-400 truncate mt-0.5">
                                 {p.wallet}
                               </div>
-                              <div className="font-mono text-xs text-zinc-500 mt-0.5 truncate">
+                              <div className="font-mono text-[11px] text-zinc-500 mt-0.5 truncate">
                                 PDA: {p.pda}
                               </div>
                             </div>
                             <CopyButton value={p.wallet} label="provider wallet" />
                           </div>
+
                           <span
-                            className={`text-xs font-mono shrink-0 ${
-                              isSlashed ? "text-rose-300" : "text-emerald-300"
+                            className={`text-xs font-mono px-2 py-0.5 rounded border shrink-0 ${
+                              insured
+                                ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                                : "text-amber-300 border-amber-500/30 bg-amber-500/10"
                             }`}
                           >
-                            {isSlashed
-                              ? `✕ Slashed (${lossRate}% loss)`
-                              : "✓ Trusted (0 losses)"}
+                            {insured ? "✓ Active / Insured" : "⚠ Under-Bonded (Needs Top-Up)"}
                           </span>
                         </div>
 
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-mono pt-3 border-t border-white/[0.06]">
                           <div>
-                            <span className="text-zinc-500 block mb-0.5">Staked Bond</span>
+                            <span className="text-zinc-500 block mb-0.5">Available / Staked</span>
                             <span className="text-white font-medium text-sm tabular-nums">
-                              {p.bondSol.toFixed(4)} SOL
+                              {avail.toFixed(4)} / {p.bondSol.toFixed(4)} SOL
                             </span>
                           </div>
                           <div>
@@ -695,6 +822,34 @@ function DashboardInner({
                             </span>
                           </div>
                         </div>
+
+                        {isOwner && (
+                          <div className="pt-3 border-t border-white/[0.06] flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-mono text-zinc-400">Top Up Bond:</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0.001"
+                              value={topUpAmounts[p.wallet] ?? "0.05"}
+                              onChange={(e) =>
+                                setTopUpAmounts((prev) => ({
+                                  ...prev,
+                                  [p.wallet]: e.target.value,
+                                }))
+                              }
+                              className="w-24 px-2.5 py-1 rounded bg-zinc-950 border border-white/10 text-xs font-mono text-white"
+                            />
+                            <span className="text-xs font-mono text-zinc-500">SOL</span>
+                            <button
+                              type="button"
+                              onClick={() => handleTopUpBond(p.wallet)}
+                              disabled={topUpLoadingWallet === p.wallet}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-medium transition-colors disabled:opacity-50"
+                            >
+                              {topUpLoadingWallet === p.wallet ? "Topping up…" : "+ Top Up Bond"}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -708,7 +863,7 @@ function DashboardInner({
           )}
         </div>
 
-        {/* TAB 3: DISPUTES */}
+        {/* TAB 4: DISPUTES */}
         <div
           role="tabpanel"
           aria-labelledby="tab-disputes"
@@ -751,7 +906,8 @@ function DashboardInner({
                   <tbody className="divide-y divide-white/10">
                     {hasLiveDisputes ? (
                       onChainDisputes.map((d) => {
-                        const timedOut = d.status === "Open" && nowUnix >= d.openedAt + 180;
+                        const timedOut =
+                          d.status === "Open" && nowUnix >= d.openedAt + resolveTimeoutSec;
                         return (
                           <tr key={d.pda} className="hover:bg-white/[0.02] transition-colors">
                             <th scope="row" className="p-4 text-zinc-100 font-medium text-left">
@@ -836,7 +992,24 @@ function DashboardInner({
           )}
         </div>
 
-        {/* TAB 4: ARCHITECTURE */}
+        {/* TAB 5: PASSWORD-GATED ARBITER PORTAL */}
+        <div
+          role="tabpanel"
+          aria-labelledby="tab-arbiter"
+          hidden={activeTab !== "arbiter"}
+        >
+          {activeTab === "arbiter" && (
+            <ArbiterTab
+              disputes={onChainDisputes}
+              onChainConfig={onChainConfig}
+              onRefresh={handleFullRefresh}
+              onRunUpdate={handleRunUpdate}
+              isLocalhostRpc={isLocalhostRpc}
+            />
+          )}
+        </div>
+
+        {/* TAB 6: ARCHITECTURE */}
         <div
           role="tabpanel"
           aria-labelledby="tab-architecture"

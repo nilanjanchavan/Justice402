@@ -23,3 +23,4 @@ build/
 .next/
 dashboard/public/demo-run.json
 dashboard/node_modules/
+services/provider-api/.registry-cache.json

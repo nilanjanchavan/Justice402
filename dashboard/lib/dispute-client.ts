@@ -1,6 +1,6 @@
 /**
- * Browser-side Anchor instruction builders for open_dispute & claim_timeout.
- * Account derivations and layouts match target/idl/justice402.json exactly.
+ * Browser-side Anchor instruction builders for open_dispute, register_provider,
+ * top_up, and claim_timeout. All account derivations & layouts match target/idl/justice402.json.
  */
 import {
   Connection,
@@ -49,17 +49,20 @@ export function getDisputePda(receiptHash: Uint8Array): PublicKey {
 
 const OPEN_DISPUTE_DISC = new Uint8Array([137, 25, 99, 119, 23, 223, 161, 42]);
 const CLAIM_TIMEOUT_DISC = new Uint8Array([130, 234, 45, 53, 120, 90, 86, 178]);
+const REGISTER_PROVIDER_DISC = new Uint8Array([254, 209, 54, 184, 46, 197, 109, 78]);
+const TOP_UP_DISC = new Uint8Array([236, 225, 96, 9, 60, 106, 77, 208]);
 
 function readU64LE(arr: Uint8Array, offset: number): bigint {
   const view = new DataView(arr.buffer, arr.byteOffset + offset, 8);
   return view.getBigUint64(0, true);
 }
 
-/**
- * Reads dispute_deposit (lamports) from on-chain Config account.
- * Config layout: disc(8) + arbiter(32) + usdc_mint(32) + dispute_window(8)
- * + resolve_timeout(8) + withdraw_delay(8) + per_ruling_payout_cap(8) + dispute_deposit(8)
- */
+function writeU64LE(val: bigint): Uint8Array {
+  const buf = new Uint8Array(8);
+  new DataView(buf.buffer).setBigUint64(0, val, true);
+  return buf;
+}
+
 async function getOnChainDisputeDeposit(connection: Connection): Promise<bigint> {
   try {
     const info = await connection.getAccountInfo(CONFIG_PDA);
@@ -69,16 +72,66 @@ async function getOnChainDisputeDeposit(connection: Connection): Promise<bigint>
   } catch {
     // fallback below
   }
-  return 10_000_000n; // 0.01 SOL default on Devnet
+  return 10_000_000n;
 }
 
+/**
+ * Shared helper to ensure a wallet's wSOL ATA exists and holds at least `requiredLamports`.
+ */
+async function buildWsolShortfallInstructions(
+  connection: Connection,
+  owner: PublicKey,
+  requiredLamports: bigint
+): Promise<{ ata: PublicKey; instructions: TransactionInstruction[] }> {
+  const ata = await getAssociatedTokenAddress(NATIVE_MINT, owner);
+  const instructions: TransactionInstruction[] = [];
+
+  let existingWsol = 0n;
+  const ataInfo = await connection.getAccountInfo(ata);
+  if (!ataInfo) {
+    instructions.push(
+      createAssociatedTokenAccountInstruction(owner, ata, owner, NATIVE_MINT)
+    );
+  } else {
+    try {
+      const bal = await connection.getTokenAccountBalance(ata);
+      existingWsol = BigInt(bal.value.amount || "0");
+    } catch {
+      existingWsol = 0n;
+    }
+  }
+
+  if (existingWsol < requiredLamports) {
+    const shortfall = Number(requiredLamports - existingWsol);
+    instructions.push(
+      SystemProgram.transfer({
+        fromPubkey: owner,
+        toPubkey: ata,
+        lamports: shortfall,
+      }),
+      createSyncNativeInstruction(ata)
+    );
+  }
+
+  return { ata, instructions };
+}
+
+/**
+ * Builds open_dispute transaction. Splits wSOL ATA wrap into `prepareTransaction`
+ * so the Ed25519 + open_dispute transaction always fits well below Solana's 1232-byte MTU limit.
+ */
 export async function buildOpenDisputeTransaction(params: {
   connection: Connection;
   buyerPubkey: PublicKey;
   receipt: ReceiptDataBrowser;
   signatureBase64: string;
   responseData: any;
-}): Promise<{ transaction: Transaction; disputePda: PublicKey; receiptHash: Uint8Array }> {
+}): Promise<{
+  prepareTransaction: Transaction | null;
+  transaction: Transaction;
+  disputePda: PublicKey;
+  receiptHash: Uint8Array;
+}> {
   const { connection, buyerPubkey, receipt, signatureBase64, responseData } = params;
 
   const canonicalBytes = encodeReceiptBrowser(receipt);
@@ -98,36 +151,22 @@ export async function buildOpenDisputeTransaction(params: {
     signature: signatureBytes,
   });
 
-  // Read exact dispute deposit required by Config and wrap only the shortfall into wSOL ATA
   const requiredDeposit = await getOnChainDisputeDeposit(connection);
-  const buyerAta = await getAssociatedTokenAddress(NATIVE_MINT, buyerPubkey);
-  const preInstructions: TransactionInstruction[] = [];
+  const { ata: buyerAta, instructions: wrapIxs } = await buildWsolShortfallInstructions(
+    connection,
+    buyerPubkey,
+    requiredDeposit
+  );
 
-  let existingWsol = 0n;
-  const ataInfo = await connection.getAccountInfo(buyerAta);
-  if (!ataInfo) {
-    preInstructions.push(
-      createAssociatedTokenAccountInstruction(buyerPubkey, buyerAta, buyerPubkey, NATIVE_MINT)
-    );
-  } else {
-    try {
-      const bal = await connection.getTokenAccountBalance(buyerAta);
-      existingWsol = BigInt(bal.value.amount || "0");
-    } catch {
-      existingWsol = 0n;
-    }
-  }
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
 
-  if (existingWsol < requiredDeposit) {
-    const shortfall = Number(requiredDeposit - existingWsol);
-    preInstructions.push(
-      SystemProgram.transfer({
-        fromPubkey: buyerPubkey,
-        toPubkey: buyerAta,
-        lamports: shortfall,
-      }),
-      createSyncNativeInstruction(buyerAta)
-    );
+  let prepareTransaction: Transaction | null = null;
+  if (wrapIxs.length > 0) {
+    prepareTransaction = new Transaction();
+    for (const ix of wrapIxs) prepareTransaction.add(ix);
+    prepareTransaction.recentBlockhash = blockhash;
+    prepareTransaction.lastValidBlockHeight = lastValidBlockHeight;
+    prepareTransaction.feePayer = buyerPubkey;
   }
 
   const ixData = new Uint8Array(OPEN_DISPUTE_DISC.length + canonicalBytes.length + 32);
@@ -153,16 +192,110 @@ export async function buildOpenDisputeTransaction(params: {
   });
 
   const tx = new Transaction();
-  for (const ix of preInstructions) tx.add(ix);
   tx.add(ed25519Ix);
   tx.add(openDisputeIx);
-
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
   tx.lastValidBlockHeight = lastValidBlockHeight;
   tx.feePayer = buyerPubkey;
 
-  return { transaction: tx, disputePda, receiptHash };
+  return { prepareTransaction, transaction: tx, disputePda, receiptHash };
+}
+
+/**
+ * Builds `register_provider(bond_amount, spec_hash)` transaction from connected wallet.
+ */
+export async function buildRegisterProviderTransaction(params: {
+  connection: Connection;
+  providerWallet: PublicKey;
+  bondLamports: bigint;
+  specHash: Uint8Array;
+}): Promise<{ transaction: Transaction; providerPda: PublicKey }> {
+  const { connection, providerWallet, bondLamports, specHash } = params;
+  if (specHash.length !== 32) throw new Error("specHash must be 32 bytes");
+
+  const providerPda = getProviderPda(providerWallet);
+  const { ata: providerAta, instructions: wrapIxs } = await buildWsolShortfallInstructions(
+    connection,
+    providerWallet,
+    bondLamports
+  );
+
+  const data = new Uint8Array(REGISTER_PROVIDER_DISC.length + 8 + 32);
+  data.set(REGISTER_PROVIDER_DISC, 0);
+  data.set(writeU64LE(bondLamports), REGISTER_PROVIDER_DISC.length);
+  data.set(specHash, REGISTER_PROVIDER_DISC.length + 8);
+
+  const regIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: providerWallet, isSigner: true, isWritable: true },
+      { pubkey: providerPda, isSigner: false, isWritable: true },
+      { pubkey: CONFIG_PDA, isSigner: false, isWritable: false },
+      { pubkey: VAULT_PDA, isSigner: false, isWritable: true },
+      { pubkey: providerAta, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(data),
+  });
+
+  const tx = new Transaction();
+  for (const ix of wrapIxs) tx.add(ix);
+  tx.add(regIx);
+
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  tx.lastValidBlockHeight = lastValidBlockHeight;
+  tx.feePayer = providerWallet;
+
+  return { transaction: tx, providerPda };
+}
+
+/**
+ * Builds `top_up(amount)` transaction from provider's connected wallet.
+ */
+export async function buildTopUpTransaction(params: {
+  connection: Connection;
+  providerWallet: PublicKey;
+  amountLamports: bigint;
+}): Promise<Transaction> {
+  const { connection, providerWallet, amountLamports } = params;
+  if (amountLamports <= 0n) throw new Error("Top-up amount must be greater than 0");
+
+  const providerPda = getProviderPda(providerWallet);
+  const { ata: providerAta, instructions: wrapIxs } = await buildWsolShortfallInstructions(
+    connection,
+    providerWallet,
+    amountLamports
+  );
+
+  const data = new Uint8Array(TOP_UP_DISC.length + 8);
+  data.set(TOP_UP_DISC, 0);
+  data.set(writeU64LE(amountLamports), TOP_UP_DISC.length);
+
+  const topUpIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: providerWallet, isSigner: true, isWritable: true },
+      { pubkey: providerPda, isSigner: false, isWritable: true },
+      { pubkey: CONFIG_PDA, isSigner: false, isWritable: false },
+      { pubkey: VAULT_PDA, isSigner: false, isWritable: true },
+      { pubkey: providerAta, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(data),
+  });
+
+  const tx = new Transaction();
+  for (const ix of wrapIxs) tx.add(ix);
+  tx.add(topUpIx);
+
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  tx.lastValidBlockHeight = lastValidBlockHeight;
+  tx.feePayer = providerWallet;
+
+  return tx;
 }
 
 export async function buildClaimTimeoutTransaction(params: {
