@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import { Connection, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 
+export const MAX_PAYMENT_AGE_SECONDS = 3600; // 1 hour window for proof freshness
+
 export interface X402ChallengeOptions {
   req: Request;
   res: Response;
@@ -10,16 +12,23 @@ export interface X402ChallengeOptions {
   requirePayment: boolean;
   rpcUrl: string;
   connection?: Connection | null;
-  usedSignatures: Set<string>;
+  usedSignatures: Map<string, number>;
 }
 
 /**
  * Shared x402 V2 challenge & Solana Devnet settlement verification helper.
+ * Preserves lookup-table account resolution, enforces transaction freshness,
+ * and records redeemed signatures atomically after validation.
  */
 export async function verifyOrChallengeX402(
   opts: X402ChallengeOptions
 ): Promise<{ ok: boolean; paymentRef: Buffer; paymentTxSig?: string }> {
   const { req, res, payTo, priceLamports, requirePayment, rpcUrl, usedSignatures } = opts;
+
+  if (!/^\d+$/.test(priceLamports) || BigInt(priceLamports) <= 0n) {
+    res.status(500).json({ error: "Invalid server price configuration" });
+    return { ok: false, paymentRef: Buffer.alloc(64, 0) };
+  }
 
   const enforce =
     requirePayment ||
@@ -74,6 +83,14 @@ export async function verifyOrChallengeX402(
     return { ok: false, paymentRef: Buffer.alloc(64, 0) };
   }
 
+  // Prune expired redemption entries past tx freshness window + safety margin
+  const nowSec = Math.floor(Date.now() / 1000);
+  for (const [sig, expiresAtSec] of usedSignatures.entries()) {
+    if (expiresAtSec < nowSec) {
+      usedSignatures.delete(sig);
+    }
+  }
+
   if (usedSignatures.has(txSignature)) {
     res.status(402).json({ error: "Payment signature already redeemed" });
     return { ok: false, paymentRef: Buffer.alloc(64, 0) };
@@ -101,17 +118,33 @@ export async function verifyOrChallengeX402(
     await new Promise((r) => setTimeout(r, 800));
   }
 
-  if (!txInfo || txInfo.meta?.err) {
+  if (!txInfo || !txInfo.meta || txInfo.meta.err) {
     res.status(402).json({
-      error: "Payment transaction not confirmed or failed on Solana",
+      error: "Payment transaction not confirmed, missing metadata, or failed on Solana",
       txSignature,
     });
     return { ok: false, paymentRef: Buffer.alloc(64, 0) };
   }
 
-  const accountKeys = txInfo.transaction.message.getAccountKeys
-    ? txInfo.transaction.message.getAccountKeys().staticAccountKeys
-    : txInfo.transaction.message.accountKeys;
+  // Reject stale payment transactions outside proof freshness window
+  const txBlockTime: number | null = txInfo.blockTime ?? null;
+  if (txBlockTime !== null && nowSec - txBlockTime > MAX_PAYMENT_AGE_SECONDS) {
+    res.status(402).json({
+      error: "Payment transaction expired outside freshness window",
+      txSignature,
+    });
+    return { ok: false, paymentRef: Buffer.alloc(64, 0) };
+  }
+
+  // Resolve full ordered account keys including address lookup table loaded addresses
+  const msg = txInfo.transaction.message;
+  const accountKeys: PublicKey[] = msg.getAccountKeys
+    ? msg
+        .getAccountKeys({ accountKeysFromLookups: txInfo.meta.loadedAddresses })
+        .keySegments()
+        .flat()
+    : msg.accountKeys;
+
   const payToIdx = accountKeys.findIndex((k: PublicKey) => k.equals(payTo));
   const minRequired = BigInt(priceLamports);
   const received =
@@ -127,12 +160,13 @@ export async function verifyOrChallengeX402(
     return { ok: false, paymentRef: Buffer.alloc(64, 0) };
   }
 
-  usedSignatures.add(txSignature);
-  if (usedSignatures.size > 5000) {
-    const oldest = usedSignatures.values().next().value;
-    if (oldest) usedSignatures.delete(oldest);
+  // Synchronous check-and-set with no intervening await to prevent concurrent replay
+  if (usedSignatures.has(txSignature)) {
+    res.status(402).json({ error: "Payment signature already redeemed" });
+    return { ok: false, paymentRef: Buffer.alloc(64, 0) };
   }
+  const retainUntilSec = (txBlockTime ?? nowSec) + MAX_PAYMENT_AGE_SECONDS + 300;
+  usedSignatures.set(txSignature, retainUntilSec);
 
   return { ok: true, paymentRef: Buffer.from(sigBytes), paymentTxSig: txSignature };
 }
-

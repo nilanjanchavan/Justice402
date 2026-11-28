@@ -2,11 +2,14 @@ import { Connection, PublicKey } from "@solana/web3.js";
 
 export const PROGRAM_ID = new PublicKey("D8uK7oT6f1pcZzK2Dq1NhL7wdNp51sS5ZhuNy4wf8WYD");
 export const CONFIG_PDA = new PublicKey("HNzoeY5QFZSFhdB1eZ3PLFHRqfxgNxEFmc56CWN3WEG");
-export const MIN_INSURED_BOND_SOL = 0.01;
+export const MIN_INSURED_BOND_LAMPORTS = 10_000_000n;
+export const MIN_INSURED_BOND_SOL = Number(MIN_INSURED_BOND_LAMPORTS) / 1_000_000_000;
 
 export interface OnChainProvider {
   pda: string;
   wallet: string;
+  bondLamports: bigint;
+  lockedLamports: bigint;
   bondSol: number;
   lockedSol: number;
   withdrawRequestedAt: number;
@@ -42,15 +45,28 @@ export interface OnChainConfig {
   disputeDepositSol: number;
 }
 
-export function availableBondSol(p: Pick<OnChainProvider, "bondSol" | "lockedSol">): number {
-  return Math.max(0, p.bondSol - p.lockedSol);
+export function availableBondLamports(
+  p: Pick<OnChainProvider, "bondLamports" | "lockedLamports">
+): bigint {
+  return p.bondLamports > p.lockedLamports ? p.bondLamports - p.lockedLamports : 0n;
+}
+
+export function availableBondSol(
+  p: Pick<OnChainProvider, "bondLamports" | "lockedLamports">
+): number {
+  return Number(availableBondLamports(p)) / 1_000_000_000;
 }
 
 export function isProviderInsured(
-  p: Pick<OnChainProvider, "bondSol" | "lockedSol">,
-  minRequiredSol: number = MIN_INSURED_BOND_SOL
+  p: Pick<OnChainProvider, "bondLamports" | "lockedLamports">,
+  minRequiredLamports: bigint = MIN_INSURED_BOND_LAMPORTS
 ): boolean {
-  return availableBondSol(p) + 1e-9 >= minRequiredSol;
+  return availableBondLamports(p) >= minRequiredLamports;
+}
+
+function readU64BigInt(data: Uint8Array, offset: number): bigint {
+  const view = new DataView(data.buffer, data.byteOffset + offset, 8);
+  return view.getBigUint64(0, true);
 }
 
 function readU64LE(data: Uint8Array, offset: number): number {
@@ -102,11 +118,15 @@ export async function fetchOnChainState(rpcUrl: string): Promise<{
 
   const providers: OnChainProvider[] = providerAccounts.map(({ pubkey, account }) => {
     const d = account.data;
+    const bondLamports = readU64BigInt(d, 40);
+    const lockedLamports = readU64BigInt(d, 48);
     return {
       pda: pubkey.toBase58(),
       wallet: new PublicKey(d.subarray(8, 40)).toBase58(),
-      bondSol: readU64LE(d, 40) / 1_000_000_000,
-      lockedSol: readU64LE(d, 48) / 1_000_000_000,
+      bondLamports,
+      lockedLamports,
+      bondSol: Number(bondLamports) / 1_000_000_000,
+      lockedSol: Number(lockedLamports) / 1_000_000_000,
       withdrawRequestedAt: readI64LE(d, 56),
       specHashHex: toHex(d.subarray(64, 96)),
       openDisputes: readU64LE(d, 96),

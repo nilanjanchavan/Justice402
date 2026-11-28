@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useId, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useId, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
@@ -108,23 +108,30 @@ function DashboardInner({
   const { toast } = useToast();
 
   const tableCaptionId = useId();
+  const loadSeqRef = useRef(0);
   const isLocalhostRpc =
     rpcUrl.includes("127.0.0.1") || rpcUrl.includes("localhost");
 
   const loadLiveState = useCallback(async (targetRpc: string) => {
+    const reqId = ++loadSeqRef.current;
     setChainLoading(true);
     setChainError(null);
     try {
       const { providers, disputes, config } = await fetchOnChainState(targetRpc);
+      if (reqId !== loadSeqRef.current) return;
       setOnChainProviders(providers);
       setOnChainDisputes(disputes);
       setOnChainConfig(config);
     } catch (err: any) {
+      if (reqId !== loadSeqRef.current) return;
       setChainError(err?.message || "Unable to reach Solana RPC");
       setOnChainProviders([]);
       setOnChainDisputes([]);
+      setOnChainConfig(null);
     } finally {
-      setChainLoading(false);
+      if (reqId === loadSeqRef.current) {
+        setChainLoading(false);
+      }
     }
   }, []);
 
@@ -189,10 +196,11 @@ function DashboardInner({
   );
 
   const explorerTxUrl = (sig: string, explicitUrl?: string) => {
+    if (explicitUrl) return explicitUrl;
     if (isLocalhostRpc) {
       return `https://explorer.solana.com/tx/${sig}?cluster=custom&customUrl=${encodeURIComponent("http://127.0.0.1:8899")}`;
     }
-    return explicitUrl || `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
+    return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
   };
 
   const handleTopUpBond = async (providerWallet: string) => {
@@ -204,8 +212,10 @@ function DashboardInner({
       return;
     }
 
-    const solAmount = parseFloat(topUpAmounts[providerWallet] || "0.05");
-    if (!Number.isFinite(solAmount) || solAmount <= 0) {
+    const rawAmount =
+      topUpAmounts[providerWallet] === undefined ? "0.05" : topUpAmounts[providerWallet].trim();
+    const solAmount = parseFloat(rawAmount);
+    if (!rawAmount || !Number.isFinite(solAmount) || solAmount <= 0) {
       toast({ type: "error", text: "Enter a positive SOL amount to top up." });
       return;
     }
@@ -220,7 +230,7 @@ function DashboardInner({
       });
 
       const sig = await sendTransaction(tx, connection);
-      await connection.confirmTransaction(
+      const conf = await connection.confirmTransaction(
         {
           signature: sig,
           blockhash: tx.recentBlockhash!,
@@ -228,6 +238,9 @@ function DashboardInner({
         },
         "confirmed"
       );
+      if (conf.value.err) {
+        throw new Error(`Top-up transaction failed on-chain: ${JSON.stringify(conf.value.err)}`);
+      }
 
       toast({
         type: "success",
@@ -292,7 +305,7 @@ function DashboardInner({
         buyerWallet: new PublicKey(dispute.buyer),
       });
       const sig = await sendTransaction(tx, connection);
-      await connection.confirmTransaction(
+      const conf = await connection.confirmTransaction(
         {
           signature: sig,
           blockhash: tx.recentBlockhash!,
@@ -300,6 +313,9 @@ function DashboardInner({
         },
         "confirmed"
       );
+      if (conf.value.err) {
+        throw new Error(`Claim timeout failed on-chain: ${JSON.stringify(conf.value.err)}`);
+      }
       toast({
         type: "success",
         text: "Timeout refund settled on Solana!",
@@ -825,8 +841,14 @@ function DashboardInner({
 
                         {isOwner && (
                           <div className="pt-3 border-t border-white/[0.06] flex flex-wrap items-center gap-2">
-                            <span className="text-xs font-mono text-zinc-400">Top Up Bond:</span>
+                            <label
+                              htmlFor={`topup-${p.wallet}`}
+                              className="text-xs font-mono text-zinc-400"
+                            >
+                              Top Up Bond:
+                            </label>
                             <input
+                              id={`topup-${p.wallet}`}
                               type="number"
                               step="0.01"
                               min="0.001"

@@ -20,8 +20,15 @@ import {
 import { formatAuditReport } from "../../arbiter/src/cli";
 import { runDeterministicSpecCheck, SpecCheckResults } from "../../arbiter/src/verifier";
 import { SPEC_CANONICAL_JSON } from "./spec";
+import { ProviderMetadataEntry } from "./registry-router";
 
 const TOKEN_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+const AUTH_CHALLENGE_TTL_MS = 2 * 60 * 1000; // 2 minutes
+const EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_EVIDENCE_ENTRIES = 200;
+const MAX_EVIDENCE_BYTES = 128 * 1024; // 128 KiB
+const MAX_AUTH_FAILURES = 5;
+const AUTH_LOCKOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 export interface CachedReceiptEntry {
   receiptBase64: string;
@@ -30,11 +37,19 @@ export interface CachedReceiptEntry {
   specJson?: string;
 }
 
+export interface EvidenceEntry {
+  responsePayload: any;
+  receiptBase64?: string;
+  specJson?: string;
+  cachedAt: number;
+}
+
 export interface ArbiterRouterOptions {
   rpcUrl?: string;
   arbiterKeypair?: Keypair;
   receiptCache?: Map<string, CachedReceiptEntry>;
-  disputeEvidenceCache?: Map<string, { responsePayload: any; receiptBase64?: string; specJson?: string }>;
+  disputeEvidenceCache?: Map<string, EvidenceEntry>;
+  providerRegistry?: Map<string, ProviderMetadataEntry>;
 }
 
 function parseKeypairEnv(raw: string): Keypair {
@@ -61,6 +76,22 @@ function timingSafePasswordMatch(entered: string, expected: string): boolean {
   const a = crypto.createHash("sha256").update(entered).digest();
   const b = crypto.createHash("sha256").update(expected).digest();
   return crypto.timingSafeEqual(a, b);
+}
+
+function verifyEd25519Signature(message: Buffer, signature: Buffer, pubkey: PublicKey): boolean {
+  try {
+    const key = crypto.createPublicKey({
+      key: Buffer.concat([
+        Buffer.from("302a300506032b6570032100", "hex"),
+        pubkey.toBuffer(),
+      ]),
+      format: "der",
+      type: "spki",
+    });
+    return crypto.verify(null, message, key, signature);
+  } catch {
+    return false;
+  }
 }
 
 function issuePortalToken(walletAddress: string, secret: string): { token: string; expiresAt: number } {
@@ -96,10 +127,26 @@ function verifyPortalToken(
 
 export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router {
   const router = Router();
-  const disputeEvidenceCache = options.disputeEvidenceCache || new Map();
+  const disputeEvidenceCache = options.disputeEvidenceCache || new Map<string, EvidenceEntry>();
+  const authChallenges = new Map<string, { wallet: string; expiresAt: number }>();
+  const failedAuthTracker = new Map<string, { failures: number; lockedUntil: number }>();
   let cachedArbiterKeypair: Keypair | null = options.arbiterKeypair || null;
 
   const getPortalWallet = () => (process.env.ARBITER_PORTAL_WALLET || "").trim();
+
+  function pruneEvidenceCache() {
+    const now = Date.now();
+    for (const [k, v] of disputeEvidenceCache.entries()) {
+      if (now - v.cachedAt > EVIDENCE_TTL_MS) {
+        disputeEvidenceCache.delete(k);
+      }
+    }
+    while (disputeEvidenceCache.size > MAX_EVIDENCE_ENTRIES) {
+      const oldest = disputeEvidenceCache.keys().next().value;
+      if (!oldest) break;
+      disputeEvidenceCache.delete(oldest);
+    }
+  }
 
   function loadArbiterKeypair(): Keypair {
     if (cachedArbiterKeypair) return cachedArbiterKeypair;
@@ -126,12 +173,40 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
     );
   }
 
-  async function buildAuditForDispute(params: {
-    disputePdaStr: string;
-    responsePayload?: any;
-    receiptBase64?: string;
-    specJson?: string;
-  }) {
+  function resolveAuthoritativeSpecText(
+    providerWalletStr: string,
+    expectedSpecHash: Buffer,
+    suppliedSpecJson?: string
+  ): { specText: string | null } {
+    const regEntry = options.providerRegistry?.get(providerWalletStr);
+    if (regEntry?.specJson) {
+      const regHash = crypto.createHash("sha256").update(regEntry.specJson).digest();
+      if (regHash.equals(expectedSpecHash)) {
+        return { specText: regEntry.specJson };
+      }
+    }
+
+    const defaultWeatherHash = crypto.createHash("sha256").update(SPEC_CANONICAL_JSON).digest();
+    if (defaultWeatherHash.equals(expectedSpecHash)) {
+      return { specText: SPEC_CANONICAL_JSON };
+    }
+
+    if (suppliedSpecJson) {
+      try {
+        const canonical = JSON.stringify(JSON.parse(suppliedSpecJson));
+        const h = crypto.createHash("sha256").update(canonical).digest();
+        if (h.equals(expectedSpecHash)) {
+          return { specText: canonical };
+        }
+      } catch {
+        // invalid json
+      }
+    }
+
+    return { specText: null };
+  }
+
+  async function fetchDisputeAndConfig(disputePdaStr: string) {
     const rpcUrl = options.rpcUrl || process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
     if (rpcUrl.includes("mainnet")) {
       throw new Error("Refusing to run arbiter on mainnet");
@@ -145,7 +220,7 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
     const idl = JSON.parse(fs.readFileSync(resolveIdlPath(), "utf8"));
     const program = new anchor.Program(idl as any, provider);
 
-    const disputePda = new PublicKey(params.disputePdaStr);
+    const disputePda = new PublicKey(disputePdaStr);
     const disputeAccount: any = await (program.account as any).dispute.fetch(disputePda);
 
     const configAccounts: any[] = await (program.account as any).config.all();
@@ -153,6 +228,19 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
       throw new Error("On-chain Config account not found");
     }
     const configAccount = configAccounts[0].account;
+
+    return { kp, program, disputePda, disputeAccount, configAccount };
+  }
+
+  async function buildAuditForDispute(params: {
+    disputePdaStr: string;
+    responsePayload?: any;
+    receiptBase64?: string;
+    specJson?: string;
+    chainCtx?: Awaited<ReturnType<typeof fetchDisputeAndConfig>>;
+  }) {
+    const chainCtx = params.chainCtx || (await fetchDisputeAndConfig(params.disputePdaStr));
+    const { kp, program, disputePda, disputeAccount, configAccount } = chainCtx;
 
     const onChainReceiptHash = Buffer.from(disputeAccount.receiptHash);
     const receiptHashHex = onChainReceiptHash.toString("hex");
@@ -215,19 +303,45 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
         : JSON.stringify(effectivePayload)
     );
 
-    const onChainEvidenceHash = Buffer.from(disputeAccount.evidenceHash);
-    const computedEvidenceHash = crypto.createHash("sha256").update(evidenceBytes).digest();
-    if (!computedEvidenceHash.equals(onChainEvidenceHash)) {
-      throw new Error(
-        `Evidence hash mismatch: on-chain dispute committed ${onChainEvidenceHash.toString("hex")}, submitted payload hashes to ${computedEvidenceHash.toString("hex")}`
-      );
+    if (evidenceBytes.byteLength > MAX_EVIDENCE_BYTES) {
+      throw new Error(`Evidence payload exceeds ${MAX_EVIDENCE_BYTES} byte limit`);
     }
 
-    const specText =
-      params.specJson ||
-      cachedByDispute?.specJson ||
-      cachedByReceipt?.specJson ||
-      SPEC_CANONICAL_JSON;
+    const { specText } = resolveAuthoritativeSpecText(
+      disputeAccount.provider.toBase58(),
+      auditReceipt.specHash,
+      params.specJson || cachedByDispute?.specJson || cachedByReceipt?.specJson
+    );
+
+    if (!specText) {
+      const missingSpecResults: SpecCheckResults = {
+        isValid: false,
+        specHashMatch: false,
+        responseHashMatch: crypto
+          .createHash("sha256")
+          .update(evidenceBytes)
+          .digest()
+          .equals(auditReceipt.responseHash),
+        schemaValid: false,
+        rangesValid: false,
+        freshnessValid: false,
+        errors: [
+          `Authoritative spec matching committed spec_hash ${auditReceipt.specHash.toString("hex")} is not available in registry.`,
+        ],
+      };
+      return {
+        kp,
+        program,
+        disputePda,
+        disputeAccount,
+        configAccount,
+        auditReceipt,
+        hasEvidence: true,
+        results: missingSpecResults,
+        reportText: formatAuditReport(auditReceipt, missingSpecResults),
+        effectivePayload,
+      };
+    }
 
     const results = runDeterministicSpecCheck({
       specContent: specText,
@@ -252,8 +366,40 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
     };
   }
 
-  // POST /arbiter/auth — verify portal password & designated arbiter wallet
-  router.post("/auth", (req: Request, res: Response) => {
+  // GET /arbiter/challenge — issue single-use wallet ownership challenge for arbiter auth
+  router.get("/challenge", (req: Request, res: Response) => {
+    const portalWallet = getPortalWallet();
+    if (!portalWallet) {
+      res.status(503).json({
+        error: "ARBITER_PORTAL_WALLET is not configured on the backend environment.",
+      });
+      return;
+    }
+
+    const walletAddress = String(req.query.wallet || "").trim();
+    if (walletAddress !== portalWallet) {
+      res.status(403).json({ error: "Unauthorized wallet for Arbiter Portal" });
+      return;
+    }
+
+    const now = Date.now();
+    for (const [k, v] of authChallenges.entries()) {
+      if (v.expiresAt < now) authChallenges.delete(k);
+    }
+
+    const nonce = crypto.randomBytes(16).toString("hex");
+    const expiresAt = now + AUTH_CHALLENGE_TTL_MS;
+    authChallenges.set(nonce, { wallet: portalWallet, expiresAt });
+
+    res.json({
+      nonce,
+      expiresAt,
+      message: `Justice402 Arbiter Portal Login\nWallet: ${portalWallet}\nNonce: ${nonce}`,
+    });
+  });
+
+  // POST /arbiter/auth — verify portal wallet signature + password with brute-force backoff
+  router.post("/auth", async (req: Request, res: Response) => {
     const expectedPassword = process.env.ARBITER_PORTAL_PASSWORD;
     const portalWallet = getPortalWallet();
     if (!expectedPassword || !portalWallet) {
@@ -264,7 +410,17 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
       return;
     }
 
-    const { password, walletAddress } = req.body || {};
+    const callerKey = req.ip || portalWallet;
+    const tracker = failedAuthTracker.get(callerKey);
+    if (tracker && tracker.lockedUntil > Date.now()) {
+      const waitSec = Math.ceil((tracker.lockedUntil - Date.now()) / 1000);
+      res.status(429).json({
+        error: `Too many failed login attempts. Try again in ${waitSec}s.`,
+      });
+      return;
+    }
+
+    const { password, walletAddress, nonce, signatureBase64 } = req.body || {};
 
     if (!walletAddress || walletAddress !== portalWallet) {
       res.status(403).json({
@@ -273,16 +429,43 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
       return;
     }
 
-    if (typeof password !== "string" || !password) {
-      res.status(400).json({ error: "Password is required" });
+    if (typeof password !== "string" || !password || !nonce || !signatureBase64) {
+      res.status(400).json({
+        error: "Password, nonce, and wallet signatureBase64 are required",
+      });
+      return;
+    }
+
+    const challenge = authChallenges.get(String(nonce));
+    if (!challenge || challenge.expiresAt < Date.now() || challenge.wallet !== portalWallet) {
+      res.status(401).json({ error: "Invalid or expired arbiter login challenge" });
+      return;
+    }
+    authChallenges.delete(String(nonce));
+
+    const expectedMsg = Buffer.from(
+      `Justice402 Arbiter Portal Login\nWallet: ${portalWallet}\nNonce: ${String(nonce)}`
+    );
+    const sigBuf = Buffer.from(String(signatureBase64), "base64");
+    const walletPk = new PublicKey(portalWallet);
+
+    if (!verifyEd25519Signature(expectedMsg, sigBuf, walletPk)) {
+      res.status(401).json({ error: "Invalid arbiter wallet signature" });
       return;
     }
 
     if (!timingSafePasswordMatch(password, expectedPassword)) {
+      const prevFailures = tracker?.failures || 0;
+      const nextFailures = prevFailures + 1;
+      const lockedUntil =
+        nextFailures >= MAX_AUTH_FAILURES ? Date.now() + AUTH_LOCKOUT_MS : 0;
+      failedAuthTracker.set(callerKey, { failures: nextFailures, lockedUntil });
+      await new Promise((r) => setTimeout(r, Math.min(2000, nextFailures * 400)));
       res.status(401).json({ error: "Invalid arbiter portal password" });
       return;
     }
 
+    failedAuthTracker.delete(callerKey);
     const { token, expiresAt } = issuePortalToken(portalWallet, expectedPassword);
     res.json({
       authenticated: true,
@@ -292,7 +475,7 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
     });
   });
 
-  // POST /arbiter/evidence — cache verified evidence payload by dispute PDA so portal inspects it from any browser
+  // POST /arbiter/evidence — cache only commitment-verified evidence payloads (bounded + TTL)
   router.post("/evidence", async (req: Request, res: Response) => {
     try {
       const { disputePda, responsePayload, receiptBase64, specJson } = req.body || {};
@@ -301,21 +484,36 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
         return;
       }
 
-      await buildAuditForDispute({
+      const ctx = await buildAuditForDispute({
         disputePdaStr: disputePda,
         responsePayload,
         receiptBase64,
         specJson,
       });
 
-      disputeEvidenceCache.set(disputePda, { responsePayload, receiptBase64, specJson });
+      if (!ctx.results || !ctx.results.specHashMatch || !ctx.results.responseHashMatch) {
+        res.status(400).json({
+          error:
+            ctx.results?.errors.join("; ") ||
+            "Cannot cache evidence: specHash or responseHash commitment mismatch",
+        });
+        return;
+      }
+
+      pruneEvidenceCache();
+      disputeEvidenceCache.set(disputePda, {
+        responsePayload,
+        receiptBase64,
+        specJson,
+        cachedAt: Date.now(),
+      });
       res.json({ ok: true });
     } catch (err: any) {
       res.status(400).json({ error: err?.message || "Failed to verify dispute evidence" });
     }
   });
 
-  // POST /arbiter/audit — run deterministic spec audit preview for an open dispute
+  // POST /arbiter/audit — run deterministic spec audit preview without submitting transaction
   router.post("/audit", async (req: Request, res: Response) => {
     try {
       const { disputePda, responsePayload, receiptBase64, specJson } = req.body || {};
@@ -337,15 +535,22 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
           disputePda,
           recommendedRuling: null,
           message:
-            "No cached HTTP payload found for this dispute PDA. Paste the API JSON payload or dispute from Playground to run full deterministic verification.",
+            "No cached HTTP payload found for this dispute PDA. Paste the API JSON payload to preview deterministic checks.",
         });
         return;
       }
 
+      const commitmentsMatch = ctx.results.specHashMatch && ctx.results.responseHashMatch;
+      const recommendedRuling = commitmentsMatch
+        ? ctx.results.isValid
+          ? "ProviderWins"
+          : "BuyerWins"
+        : null;
+
       res.json({
         hasEvidence: true,
         disputePda,
-        recommendedRuling: ctx.results.isValid ? "ProviderWins" : "BuyerWins",
+        recommendedRuling,
         reportText: ctx.reportText,
         auditReport: ctx.results,
         responsePayload: ctx.effectivePayload,
@@ -371,8 +576,8 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
         return;
       }
 
-      // If manual ruling override is requested, require valid portal authentication
-      if (rulingOverride !== undefined) {
+      const isManualOverride = rulingOverride !== undefined;
+      if (isManualOverride) {
         const portalToken = req.headers["x-arbiter-token"] as string | undefined;
         const walletHeader = req.headers["x-arbiter-wallet"] as string | undefined;
         const ok = verifyPortalToken(
@@ -393,15 +598,9 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
         }
       }
 
-      const ctx = await buildAuditForDispute({
-        disputePdaStr,
-        responsePayload,
-        receiptBase64,
-        specJson,
-      });
-
-      const statusKey = Object.keys(ctx.disputeAccount.status)[0];
-      if (!ctx.disputeAccount.status.open) {
+      const chainCtx = await fetchDisputeAndConfig(disputePdaStr);
+      const statusKey = Object.keys(chainCtx.disputeAccount.status)[0];
+      if (!chainCtx.disputeAccount.status.open) {
         res.status(400).json({
           error: `Dispute is already resolved (${statusKey})`,
           status: statusKey,
@@ -409,53 +608,88 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
         return;
       }
 
-      if (!ctx.kp.publicKey.equals(ctx.configAccount.arbiter)) {
+      if (!chainCtx.kp.publicKey.equals(chainCtx.configAccount.arbiter)) {
         res.status(403).json({
-          error: `Configured server wallet (${ctx.kp.publicKey.toBase58()}) does not match on-chain Config arbiter (${ctx.configAccount.arbiter.toBase58()}).`,
+          error: `Configured server wallet (${chainCtx.kp.publicKey.toBase58()}) does not match on-chain Config arbiter (${chainCtx.configAccount.arbiter.toBase58()}).`,
         });
         return;
       }
 
-      let ruling: "BuyerWins" | "ProviderWins";
-      let rulingHash: Buffer;
-      let reportText = ctx.reportText;
+      let auditCtx: Awaited<ReturnType<typeof buildAuditForDispute>> | null = null;
+      let auditError: string | null = null;
 
-      if (rulingOverride && !ctx.hasEvidence) {
-        // Authorized Arbiter Portal manual settlement when off-chain payload wasn't cached
+      try {
+        auditCtx = await buildAuditForDispute({
+          disputePdaStr,
+          responsePayload,
+          receiptBase64,
+          specJson,
+          chainCtx,
+        });
+      } catch (err: any) {
+        if (!isManualOverride) {
+          res.status(400).json({ error: err?.message || "Audit verification failed" });
+          return;
+        }
+        auditError = err?.message || "Optional audit skipped";
+      }
+
+      let ruling: "BuyerWins" | "ProviderWins";
+      let recommendationSummary = "Unavailable";
+
+      if (isManualOverride) {
         ruling = rulingOverride;
-        reportText = `Manual Arbiter Portal Ruling: ${ruling} for dispute ${disputePdaStr}`;
-        rulingHash = crypto.createHash("sha256").update(reportText).digest();
+        if (auditCtx?.hasEvidence && auditCtx.results) {
+          const commitsOk =
+            auditCtx.results.specHashMatch && auditCtx.results.responseHashMatch;
+          recommendationSummary = commitsOk
+            ? auditCtx.results.isValid
+              ? "ProviderWins"
+              : "BuyerWins"
+            : "None (Commitment Mismatch)";
+        } else if (auditError) {
+          recommendationSummary = `Audit unavailable (${auditError})`;
+        }
       } else {
-        if (!ctx.hasEvidence || !ctx.results) {
+        if (!auditCtx || !auditCtx.hasEvidence || !auditCtx.results) {
           res.status(400).json({
             error:
               "Missing responsePayload for audit (and receipt is not in server memory). Submit the API JSON payload returned with this receipt.",
           });
           return;
         }
-        if (!ctx.results.specHashMatch || !ctx.results.responseHashMatch) {
+        if (!auditCtx.results.specHashMatch || !auditCtx.results.responseHashMatch) {
           res.status(400).json({
-            error: ctx.results.errors.join("; ") || "Cryptographic commitment check failed",
-            auditReport: ctx.results,
+            error: auditCtx.results.errors.join("; ") || "Cryptographic commitment check failed",
+            auditReport: auditCtx.results,
           });
           return;
         }
-        ruling = rulingOverride || (ctx.results.isValid ? "ProviderWins" : "BuyerWins");
-        const reportStr = ctx.reportText || `Ruling: ${ruling}`;
-        rulingHash = crypto.createHash("sha256").update(reportStr).digest();
+        ruling = auditCtx.results.isValid ? "ProviderWins" : "BuyerWins";
+        recommendationSummary = ruling;
       }
 
+      const structuredDecisionRecord = [
+        `DisputePDA: ${disputePdaStr}`,
+        `SelectedRuling: ${ruling}`,
+        `AuditRecommendation: ${recommendationSummary}`,
+        auditCtx?.reportText || "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const rulingHash = crypto.createHash("sha256").update(structuredDecisionRecord).digest();
       const buyerTokenAccount = getAssociatedTokenAddressSync(
-        ctx.configAccount.usdcMint,
-        ctx.disputeAccount.buyer
+        chainCtx.configAccount.usdcMint,
+        chainCtx.disputeAccount.buyer
       );
 
       const txSig = await resolveDisputeRuling({
-        program: ctx.program,
-        arbiterKeypair: ctx.kp,
-        disputePda: ctx.disputePda,
-        providerWallet: ctx.disputeAccount.provider,
-        buyerWallet: ctx.disputeAccount.buyer,
+        program: chainCtx.program,
+        arbiterKeypair: chainCtx.kp,
+        disputePda: chainCtx.disputePda,
+        providerWallet: chainCtx.disputeAccount.provider,
+        buyerWallet: chainCtx.disputeAccount.buyer,
         buyerTokenAccount,
         ruling,
         rulingHash,
@@ -468,8 +702,8 @@ export function createArbiterRouter(options: ArbiterRouterOptions = {}): Router 
         txSignature: txSig,
         explorerUrl: `https://explorer.solana.com/tx/${txSig}?cluster=devnet`,
         rulingHashHex: rulingHash.toString("hex"),
-        reportText,
-        auditReport: ctx.results || undefined,
+        reportText: structuredDecisionRecord,
+        auditReport: auditCtx?.results || undefined,
       });
     } catch (err: any) {
       const msg = err?.message || "Arbiter resolution failed";

@@ -4,20 +4,19 @@ import React, { useState, useCallback, useEffect } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
-import {
-  DEFAULT_WEATHER_SPEC_TEMPLATE,
-  ProviderConfig,
-} from "../lib/providers-config";
+import { ProviderConfig } from "../lib/providers-config";
 import {
   decodePaymentRefTxSig,
   decodeReceiptBrowser,
   ReceiptDataBrowser,
+  sha256,
   toHex,
 } from "../lib/receipt-browser";
 import { verifyResponseAgainstSpec, SpecCheckResult } from "../lib/spec-verifier";
 import { buildOpenDisputeTransaction } from "../lib/dispute-client";
 import { saveDisputeEvidence, saveLiveRun } from "../lib/live-run";
 import {
+  availableBondLamports,
   availableBondSol,
   isProviderInsured,
   MIN_INSURED_BOND_SOL,
@@ -31,6 +30,7 @@ interface PlaygroundState {
   selectedWallet: string | null;
   simulateLie: boolean;
   loading: boolean;
+  coSigning: boolean;
   stageLabel: string;
   paymentTxSig: string | null;
   responseData: any | null;
@@ -87,6 +87,7 @@ export default function PlaygroundTab({
     selectedWallet: providers[1]?.wallet || providers[0]?.wallet || null,
     simulateLie: false,
     loading: false,
+    coSigning: false,
     stageLabel: "",
     paymentTxSig: null,
     responseData: null,
@@ -145,7 +146,7 @@ export default function PlaygroundTab({
             "Verified provider available bond (staked - locked) and immutable spec_hash on Solana Devnet.",
           details: {
             provider: params.provider.wallet,
-            availableBond: cp ? `${availableBondSol(cp).toFixed(4)} SOL` : "0.0500 SOL",
+            availableBond: cp ? `${availableBondSol(cp).toFixed(4)} SOL` : "Unknown",
             slashed: cp ? `${cp.totalSlashedSol.toFixed(4)} SOL` : "0.0000 SOL",
           },
         },
@@ -193,7 +194,8 @@ export default function PlaygroundTab({
           status: "SUCCESS",
           description: `Arbiter ran deterministic spec audit and signed ${params.arbiterResult.ruling} on Solana.`,
           txSignature: params.arbiterResult.txSignature,
-          explorerUrl: params.arbiterResult.explorerUrl || explorerTx(params.arbiterResult.txSignature),
+          explorerUrl:
+            params.arbiterResult.explorerUrl || explorerTx(params.arbiterResult.txSignature),
           details: {
             ruling: params.arbiterResult.ruling,
             disputePda: params.disputePda,
@@ -215,7 +217,7 @@ export default function PlaygroundTab({
     [explorerTx, isLocalhostRpc, onRunUpdate]
   );
 
-  // Fetch URL directly or fallback through /providers/proxy if custom external API lacks CORS headers
+  // Fetch URL directly or fallback through /providers/proxy preserving upstream 402 envelopes
   async function fetchX402Endpoint(url: string, paymentProofB64?: string) {
     const headers: Record<string, string> = {};
     if (paymentProofB64) headers["PAYMENT-SIGNATURE"] = paymentProofB64;
@@ -249,8 +251,10 @@ export default function PlaygroundTab({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ targetUrl: url, paymentSignature: paymentProofB64 }),
       });
-      const proxyData = await proxyRes.json();
-      if (!proxyRes.ok) throw new Error(proxyData.error || "Proxy request failed");
+      const proxyData = await proxyRes.json().catch(() => ({}));
+      if (!proxyRes.ok && !proxyData?.proxied) {
+        throw new Error(proxyData.error || `Proxy relay failed (${proxyRes.status})`);
+      }
       return {
         status: proxyData.status,
         paymentRequiredHeader: proxyData.headers?.["payment-required"] || null,
@@ -261,16 +265,27 @@ export default function PlaygroundTab({
     }
   }
 
-  // Step 1 & 2: Pre-flight bond check -> 402 payment -> 249-byte receipt -> spec verify
   const handleSendRequest = useCallback(
     async (provider: ProviderConfig) => {
+      if (state.coSigning) {
+        toast({ type: "info", text: "Finish or cancel receipt co-signing before sending a new call." });
+        return;
+      }
       if (!connected || !publicKey) {
         setVisible(true);
         toast({ type: "info", text: "Connect a Solana wallet first to execute a paid x402 call." });
         return;
       }
 
-      if (provider.chainState && !isProviderInsured(provider.chainState)) {
+      if (!provider.chainState) {
+        toast({
+          type: "error",
+          text: "On-chain provider bond coverage is unknown (RPC load pending or failed). Refresh on-chain state first.",
+        });
+        return;
+      }
+
+      if (!isProviderInsured(provider.chainState)) {
         toast({
           type: "error",
           text: `${provider.name} is Under-Bonded (${availableBondSol(provider.chainState).toFixed(4)} SOL available < ${MIN_INSURED_BOND_SOL.toFixed(2)} SOL). Provider must Top Up Bond first.`,
@@ -278,10 +293,20 @@ export default function PlaygroundTab({
         return;
       }
 
+      if (provider.badge === "community" && provider.hostedProxy && !provider.hasRegistryMetadata) {
+        toast({
+          type: "error",
+          text: "Community provider metadata/spec is not published in the public registry yet.",
+        });
+        return;
+      }
+
+      const committedSpecHashHex = provider.chainState.specHashHex;
+
       update({
         selectedWallet: provider.wallet,
         loading: true,
-        stageLabel: "Fetching service spec & querying x402 endpoint…",
+        stageLabel: "Verifying committed service spec & querying x402 endpoint…",
         paymentTxSig: null,
         responseData: null,
         receipt: null,
@@ -296,11 +321,18 @@ export default function PlaygroundTab({
       });
 
       try {
-        let specJson = provider.specJson || "";
-        if (!specJson) {
+        let authoritativeSpecJson = provider.specJson || "";
+        if (!authoritativeSpecJson) {
           const specRes = await fetch(`${DEFAULT_PROVIDER_URL}/spec`);
           if (!specRes.ok) throw new Error(`Failed to fetch /spec (${specRes.status})`);
-          specJson = await specRes.text();
+          authoritativeSpecJson = await specRes.text();
+        }
+
+        const specDigest = toHex(await sha256(authoritativeSpecJson));
+        if (specDigest !== committedSpecHashHex) {
+          throw new Error(
+            `Committed spec mismatch: registry spec hashes to ${specDigest}, on-chain provider committed ${committedSpecHashHex}.`
+          );
         }
 
         const sep = provider.endpoint.includes("?") ? "&" : "?";
@@ -355,10 +387,13 @@ export default function PlaygroundTab({
             stageLabel: "Confirming x402 SOL payment on Solana Devnet…",
           });
 
-          await connection.confirmTransaction(
+          const payConf = await connection.confirmTransaction(
             { signature: paymentTxSig, blockhash, lastValidBlockHeight },
             "confirmed"
           );
+          if (payConf.value.err) {
+            throw new Error(`x402 payment failed on-chain: ${JSON.stringify(payConf.value.err)}`);
+          }
 
           toast({
             type: "info",
@@ -386,10 +421,9 @@ export default function PlaygroundTab({
         const body = reply.body || {};
         const data = body.data || body;
         const receiptB64 = body.receipt?.bytesBase64 || reply.receiptHeader || "";
-        let sigB64 = body.receipt?.signatureBase64 || reply.signatureHeader || "";
+        const sigB64 = body.receipt?.signatureBase64 || reply.signatureHeader || "";
         const needsProviderSig = Boolean(body.receipt?.needsProviderSignature && !sigB64);
         const effectivePaySig = paymentTxSig || body.payment?.txSignature || null;
-        if (body.specJson) specJson = body.specJson;
 
         if (!receiptB64) {
           throw new Error("Provider response missing 249-byte canonical receipt");
@@ -397,9 +431,26 @@ export default function PlaygroundTab({
 
         const receipt = decodeReceiptBrowser(receiptB64);
 
+        // Bind both receipt.specHash and any returned body.specJson strictly to on-chain specHashHex
+        const receiptSpecHex = toHex(receipt.specHash);
+        if (receiptSpecHex !== committedSpecHashHex) {
+          throw new Error(
+            `Receipt specHash (${receiptSpecHex}) does not match provider's on-chain specHash (${committedSpecHashHex}).`
+          );
+        }
+
+        if (body.specJson) {
+          const returnedSpecHex = toHex(await sha256(String(body.specJson)));
+          if (returnedSpecHex !== committedSpecHashHex) {
+            throw new Error(
+              `Returned response specJson (${returnedSpecHex}) does not match provider's on-chain specHash (${committedSpecHashHex}).`
+            );
+          }
+        }
+
         const rawBytes = new TextEncoder().encode(JSON.stringify(data));
         const verifyResult = await verifyResponseAgainstSpec({
-          specJson: specJson || DEFAULT_WEATHER_SPEC_TEMPLATE,
+          specJson: authoritativeSpecJson,
           expectedSpecHash: receipt.specHash,
           responseData: data,
           rawResponseBytes: rawBytes,
@@ -416,7 +467,7 @@ export default function PlaygroundTab({
           receiptBase64: receiptB64,
           signatureBase64: sigB64,
           needsProviderSig,
-          specJson,
+          specJson: authoritativeSpecJson,
           verifyResult,
         });
 
@@ -446,9 +497,10 @@ export default function PlaygroundTab({
       }
     },
     [
+      state.coSigning,
+      state.simulateLie,
       connected,
       publicKey,
-      state.simulateLie,
       setVisible,
       connection,
       sendTransaction,
@@ -458,26 +510,42 @@ export default function PlaygroundTab({
     ]
   );
 
-  // Allow owner of a Hosted Test Route provider to sign the 249-byte canonical receipt directly via signMessage
+  // Co-sign 249-byte canonical receipt safely; discard if receipt changed during wallet prompt
   const handleCoSignTestReceipt = useCallback(async () => {
     if (!publicKey || !state.receiptBase64 || !signMessage) {
       toast({ type: "error", text: "Connected wallet does not support off-chain message signing." });
       return;
     }
+    const signingReceiptB64 = state.receiptBase64;
+    update({ coSigning: true });
     try {
-      const raw = Uint8Array.from(atob(state.receiptBase64), (c) => c.charCodeAt(0));
+      const raw = Uint8Array.from(atob(signingReceiptB64), (c) => c.charCodeAt(0));
       const sig = await signMessage(raw);
       const sigB64 = btoa(String.fromCharCode(...Array.from(sig)));
-      update({ signatureBase64: sigB64, needsProviderSig: false });
-      toast({ type: "success", text: "Provider wallet Ed25519 signature attached!" });
+
+      let applied = false;
+      setState((s) => {
+        if (s.receiptBase64 !== signingReceiptB64) {
+          return { ...s, coSigning: false };
+        }
+        applied = true;
+        return { ...s, signatureBase64: sigB64, needsProviderSig: false, coSigning: false };
+      });
+
+      if (applied) {
+        toast({ type: "success", text: "Provider wallet Ed25519 signature attached!" });
+      } else {
+        toast({ type: "warning", text: "Receipt changed during signing; signature discarded." });
+      }
     } catch (err: any) {
+      update({ coSigning: false });
       toast({ type: "warning", text: err?.message || "Signature cancelled" });
     }
   }, [publicKey, state.receiptBase64, signMessage, toast]);
 
-  // Step 3: Open dispute in split steps so Ed25519 + open_dispute stays under 1232 bytes
+  // Open dispute using receipt's provider coverage and fresh blockhash after wSOL wrap
   const handleOpenDispute = useCallback(async () => {
-    if (!connected || !publicKey || !state.receipt || !state.responseData || !selectedProvider) {
+    if (!connected || !publicKey || !state.receipt || !state.responseData) {
       toast({ type: "error", text: "Connect wallet and execute an x402 API call first" });
       return;
     }
@@ -489,14 +557,15 @@ export default function PlaygroundTab({
       return;
     }
 
-    const claimSol = Number(state.receipt.price) / 1e9;
-    if (
-      selectedProvider.chainState &&
-      availableBondSol(selectedProvider.chainState) + 1e-9 < claimSol
-    ) {
+    const targetProviderWallet = state.receipt.provider.toBase58();
+    const receiptProvider = providers.find((p) => p.wallet === targetProviderWallet);
+    const targetChainState = receiptProvider?.chainState;
+    const claimLamports = state.receipt.price;
+
+    if (targetChainState && availableBondLamports(targetChainState) < claimLamports) {
       toast({
         type: "error",
-        text: `Provider bond too low (${availableBondSol(selectedProvider.chainState).toFixed(4)} SOL available < ${claimSol.toFixed(4)} SOL claim). Top up bond first.`,
+        text: `Provider (${targetProviderWallet.slice(0, 6)}…) bond too low (${availableBondSol(targetChainState).toFixed(4)} SOL available < ${(Number(claimLamports) / 1e9).toFixed(4)} SOL claim). Top up bond first.`,
       });
       return;
     }
@@ -519,7 +588,7 @@ export default function PlaygroundTab({
           text: "Step 1/2: Wrapping 0.01 SOL dispute deposit into wSOL…",
         });
         const prepSig = await sendTransaction(prepareTransaction, connection);
-        await connection.confirmTransaction(
+        const prepConf = await connection.confirmTransaction(
           {
             signature: prepSig,
             blockhash: prepareTransaction.recentBlockhash!,
@@ -527,6 +596,14 @@ export default function PlaygroundTab({
           },
           "confirmed"
         );
+        if (prepConf.value.err) {
+          throw new Error(`wSOL wrap failed: ${JSON.stringify(prepConf.value.err)}`);
+        }
+
+        // Refresh blockhash immediately before sending the second transaction
+        const freshBh = await connection.getLatestBlockhash("confirmed");
+        transaction.recentBlockhash = freshBh.blockhash;
+        transaction.lastValidBlockHeight = freshBh.lastValidBlockHeight;
       }
 
       toast({
@@ -537,7 +614,7 @@ export default function PlaygroundTab({
       });
 
       const txSig = await sendTransaction(transaction, connection);
-      await connection.confirmTransaction(
+      const openConf = await connection.confirmTransaction(
         {
           signature: txSig,
           blockhash: transaction.recentBlockhash!,
@@ -545,6 +622,9 @@ export default function PlaygroundTab({
         },
         "confirmed"
       );
+      if (openConf.value.err) {
+        throw new Error(`open_dispute failed on-chain: ${JSON.stringify(openConf.value.err)}`);
+      }
 
       const disputePdaStr = disputePda.toBase58();
       saveDisputeEvidence({
@@ -554,10 +634,9 @@ export default function PlaygroundTab({
         signatureBase64: state.signatureBase64,
         openTxSig: txSig,
         paymentTxSig: state.paymentTxSig || undefined,
-        providerWallet: state.receipt.provider.toBase58(),
+        providerWallet: targetProviderWallet,
       });
 
-      // Cache evidence on backend so the Arbiter Portal can inspect it from any session
       fetch(`${DEFAULT_PROVIDER_URL}/arbiter/evidence`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -575,16 +654,18 @@ export default function PlaygroundTab({
         disputePda: disputePdaStr,
       });
 
-      pushTimelineRun({
-        provider: selectedProvider,
-        buyer: publicKey.toBase58(),
-        paymentTxSig: state.paymentTxSig,
-        data: state.responseData,
-        verifyResult: state.verifyResult,
-        disputePda: disputePdaStr,
-        disputeTxSig: txSig,
-        priceLamports: Number(state.receipt.price),
-      });
+      if (receiptProvider || selectedProvider) {
+        pushTimelineRun({
+          provider: receiptProvider || selectedProvider!,
+          buyer: publicKey.toBase58(),
+          paymentTxSig: state.paymentTxSig,
+          data: state.responseData,
+          verifyResult: state.verifyResult,
+          disputePda: disputePdaStr,
+          disputeTxSig: txSig,
+          priceLamports: Number(state.receipt.price),
+        });
+      }
 
       toast({
         type: "success",
@@ -606,6 +687,7 @@ export default function PlaygroundTab({
     connected,
     publicKey,
     state,
+    providers,
     selectedProvider,
     connection,
     sendTransaction,
@@ -615,9 +697,12 @@ export default function PlaygroundTab({
     onRefresh,
   ]);
 
-  // Step 4: Automated Arbiter Ruling
   const handleRequestArbiter = useCallback(async () => {
-    if (!state.disputePda || !publicKey || !selectedProvider) return;
+    if (!state.disputePda || !publicKey) return;
+    const targetProvider =
+      (state.receipt &&
+        providers.find((p) => p.wallet === state.receipt!.provider.toBase58())) ||
+      selectedProvider;
 
     update({ arbiterLoading: true });
 
@@ -640,17 +725,19 @@ export default function PlaygroundTab({
 
       update({ arbiterLoading: false, arbiterResult: data });
 
-      pushTimelineRun({
-        provider: selectedProvider,
-        buyer: publicKey.toBase58(),
-        paymentTxSig: state.paymentTxSig,
-        data: state.responseData,
-        verifyResult: state.verifyResult,
-        disputePda: state.disputePda,
-        disputeTxSig: state.disputeTxSig,
-        arbiterResult: data,
-        priceLamports: state.receipt ? Number(state.receipt.price) : 10_000_000,
-      });
+      if (targetProvider) {
+        pushTimelineRun({
+          provider: targetProvider,
+          buyer: publicKey.toBase58(),
+          paymentTxSig: state.paymentTxSig,
+          data: state.responseData,
+          verifyResult: state.verifyResult,
+          disputePda: state.disputePda,
+          disputeTxSig: state.disputeTxSig,
+          arbiterResult: data,
+          priceLamports: state.receipt ? Number(state.receipt.price) : 10_000_000,
+        });
+      }
 
       toast({
         type: data.ruling === "BuyerWins" ? "success" : "info",
@@ -666,16 +753,27 @@ export default function PlaygroundTab({
       update({ arbiterLoading: false });
       toast({ type: "error", text: `Arbiter error: ${err?.message || err}` });
     }
-  }, [state, publicKey, selectedProvider, pushTimelineRun, toast, onRefresh]);
+  }, [state, publicKey, providers, selectedProvider, pushTimelineRun, toast, onRefresh]);
 
   const { receipt, verifyResult, responseData } = state;
   const decodedPayRefSig = receipt ? decodePaymentRefTxSig(receipt.paymentReference) : null;
-  const selectedInsured = selectedProvider?.chainState
-    ? isProviderInsured(selectedProvider.chainState)
-    : true;
+
+  const hasChainState = Boolean(selectedProvider?.chainState);
+  const selectedInsured = Boolean(
+    selectedProvider?.chainState && isProviderInsured(selectedProvider.chainState)
+  );
+  const selectedMissingMeta = Boolean(
+    selectedProvider &&
+      selectedProvider.badge === "community" &&
+      selectedProvider.hostedProxy &&
+      !selectedProvider.hasRegistryMetadata
+  );
   const selectedAvailSol = selectedProvider?.chainState
     ? availableBondSol(selectedProvider.chainState)
     : 0;
+  const canPaySelected = Boolean(
+    selectedProvider && hasChainState && selectedInsured && !selectedMissingMeta
+  );
 
   return (
     <section className="space-y-6">
@@ -750,10 +848,12 @@ export default function PlaygroundTab({
                     <span className="text-zinc-500">
                       {p.wallet.slice(0, 6)}…{p.wallet.slice(-4)}
                     </span>
-                    {liveStats && (
+                    {liveStats ? (
                       <span className={insured ? "text-emerald-300" : "text-amber-300"}>
                         {insured ? "✓ Active / Insured" : "⚠ Under-Bonded"}
                       </span>
+                    ) : (
+                      <span className="text-zinc-500">Coverage Unknown</span>
                     )}
                   </div>
                   {liveStats && (
@@ -772,7 +872,22 @@ export default function PlaygroundTab({
 
         {selectedProvider && (
           <div className="space-y-3 pt-1">
-            {!selectedInsured && (
+            {!hasChainState && (
+              <div className="bg-amber-950/40 border border-amber-500/40 rounded-lg p-3.5 text-xs font-mono text-amber-200 flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  ⚠ <strong>Coverage Unknown</strong>: On-chain provider bond data has not loaded yet. Refresh RPC state before executing paid calls.
+                </span>
+                <button
+                  type="button"
+                  onClick={onRefresh}
+                  className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-100 shrink-0"
+                >
+                  ↻ Retry RPC Load
+                </button>
+              </div>
+            )}
+
+            {hasChainState && !selectedInsured && (
               <div className="bg-amber-950/40 border border-amber-500/40 rounded-lg p-3.5 text-xs font-mono text-amber-200 flex flex-wrap items-center justify-between gap-2">
                 <span>
                   ⚠ <strong>Under-Bonded Provider</strong>: Available bond ({selectedAvailSol.toFixed(4)} SOL) is below the {MIN_INSURED_BOND_SOL.toFixed(2)} SOL insurance minimum. Paid calls are blocked until topped up.
@@ -787,11 +902,17 @@ export default function PlaygroundTab({
               </div>
             )}
 
+            {selectedMissingMeta && (
+              <div className="bg-amber-950/40 border border-amber-500/40 rounded-lg p-3.5 text-xs font-mono text-amber-200">
+                ⚠ Hosted calls are disabled until this provider&apos;s metadata and spec are published in the public registry.
+              </div>
+            )}
+
             <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
                 onClick={() => handleSendRequest(selectedProvider)}
-                disabled={state.loading || !selectedInsured}
+                disabled={state.loading || state.coSigning || !canPaySelected}
                 className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-medium transition-colors disabled:opacity-50"
               >
                 {state.loading
@@ -922,9 +1043,10 @@ export default function PlaygroundTab({
                       <button
                         type="button"
                         onClick={handleCoSignTestReceipt}
-                        className="px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs"
+                        disabled={state.coSigning}
+                        className="px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs disabled:opacity-50"
                       >
-                        ✍ Co-Sign 249-Byte Receipt with Wallet
+                        {state.coSigning ? "Signing…" : "✍ Co-Sign 249-Byte Receipt with Wallet"}
                       </button>
                     )}
                   </div>

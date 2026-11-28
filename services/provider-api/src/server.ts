@@ -10,8 +10,10 @@ import {
 } from "@justice402/anchor-client";
 import { SPEC_HASH, SPEC_CANONICAL_JSON } from "./spec";
 import { createArbiterRouter, CachedReceiptEntry } from "./arbiter-router";
-import { createRegistryRouter } from "./registry-router";
+import { createRegistryRouter, ProviderMetadataEntry } from "./registry-router";
 import { verifyOrChallengeX402 } from "./x402";
+
+const U64_MAX = 18446744073709551615n;
 
 export function signWithKeypair(message: Buffer, keypair: Keypair): Buffer {
   const privKey = crypto.createPrivateKey({
@@ -30,7 +32,7 @@ export interface ProviderAppOptions {
   lyingProviderKeypair?: Keypair;
   subtleProviderKeypair?: Keypair;
   specHash?: Buffer;
-  priceLamports?: number | BN;
+  priceLamports?: number | bigint | string | BN;
   allowedOrigin?: string;
   maxRequestsPerMinute?: number;
   nowFn?: () => number;
@@ -41,6 +43,7 @@ export interface ProviderAppOptions {
 
 export function createProviderApp(options: ProviderAppOptions): express.Application {
   const app = express();
+  app.set("trust proxy", 1);
   app.use(express.json());
 
   const {
@@ -48,19 +51,38 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     lyingProviderKeypair = providerKeypair,
     subtleProviderKeypair = providerKeypair,
     specHash = SPEC_HASH,
-    priceLamports = 5_000_000,
+    priceLamports = "5000000",
     allowedOrigin = process.env.DASHBOARD_ORIGIN || process.env.ALLOWED_ORIGINS || "*",
     maxRequestsPerMinute = 120,
     requirePayment = false,
     rpcUrl = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com",
   } = options;
 
+  // Validate exact integer decimal u64 string for priceLamports before mounting routes
+  const priceLamportsStr =
+    typeof priceLamports === "number"
+      ? Number.isSafeInteger(priceLamports)
+        ? String(priceLamports)
+        : (() => {
+            throw new Error("Unsafe number passed as priceLamports; use string, bigint, or BN");
+          })()
+      : priceLamports.toString();
+
+  if (!/^\d+$/.test(priceLamportsStr)) {
+    throw new Error(`Invalid priceLamports: ${priceLamportsStr}`);
+  }
+  const priceBig = BigInt(priceLamportsStr);
+  if (priceBig <= 0n || priceBig > U64_MAX) {
+    throw new Error(`priceLamports out of u64 bounds (> 0): ${priceLamportsStr}`);
+  }
+
   const currentUnixTime = () =>
     options.nowFn ? options.nowFn() : Math.floor(Date.now() / 1000);
 
   let nonceCounter = Math.floor(Date.now() / 1000);
-  const usedSignatures = new Set<string>();
+  const usedSignatures = new Map<string, number>();
   const receiptCache = new Map<string, CachedReceiptEntry>();
+  const providerRegistry = new Map<string, ProviderMetadataEntry>();
   const rpcConnection = requirePayment ? new Connection(rpcUrl, "confirmed") : null;
 
   // 1. CORS Configuration
@@ -131,20 +153,18 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
         subtle: subtleProviderKeypair.publicKey.toBase58(),
       },
       specHash: specHash.toString("hex"),
-      priceLamports: Number(priceLamports.toString()),
+      priceLamports: priceLamportsStr,
       requirePayment,
       network: "devnet",
       timestamp: currentUnixTime(),
     });
   });
 
-  // Off-chain service spec endpoint: /spec
   app.get("/spec", (_req: Request, res: Response) => {
     res.setHeader("Content-Type", "application/json");
     res.send(SPEC_CANONICAL_JSON);
   });
 
-  // Reference ground-truth endpoint: /reference/weather
   app.get("/reference/weather", (req: Request, res: Response) => {
     const city = (req.query.city as string) || "SolanaBeach";
     res.json({
@@ -174,7 +194,7 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
       requestHash,
       responseHash,
       paymentReference: params.paymentRef,
-      price: new BN(priceLamports.toString()),
+      price: new BN(priceLamportsStr),
       timestamp: currentUnixTime(),
       nonce: ++nonceCounter,
     };
@@ -216,7 +236,7 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
       req,
       res,
       payTo: signerKeypair.publicKey,
-      priceLamports: priceLamports.toString(),
+      priceLamports: priceLamportsStr,
       requirePayment,
       rpcUrl,
       connection: rpcConnection,
@@ -244,7 +264,7 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
           txSignature: payment.paymentTxSig,
           network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
           payTo: signerKeypair.publicKey.toBase58(),
-          amount: priceLamports.toString(),
+          amount: priceLamportsStr,
         })
       ).toString("base64");
       res.setHeader("PAYMENT-RESPONSE", paymentResp);
@@ -261,13 +281,12 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
         ? {
             txSignature: payment.paymentTxSig,
             payTo: signerKeypair.publicKey.toBase58(),
-            amountLamports: Number(priceLamports.toString()),
+            amountLamports: priceLamportsStr,
           }
         : undefined,
     });
   }
 
-  // Honest endpoint: /weather
   app.get("/weather", async (req: Request, res: Response) => {
     await handleWeatherRoute(req, res, providerKeypair, {
       city: "SolanaBeach",
@@ -277,7 +296,6 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     });
   });
 
-  // Lying endpoint: /weather-lying
   app.get("/weather-lying", async (req: Request, res: Response) => {
     await handleWeatherRoute(req, res, lyingProviderKeypair, {
       city: "SolanaBeach",
@@ -287,7 +305,6 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     });
   });
 
-  // Subtle liar endpoint: /weather-plausible-wrong
   app.get("/weather-plausible-wrong", async (req: Request, res: Response) => {
     await handleWeatherRoute(req, res, subtleProviderKeypair, {
       city: "SolanaBeach",
@@ -302,10 +319,11 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     "/providers",
     createRegistryRouter({
       rpcUrl,
-      priceLamports: Number(priceLamports.toString()),
+      priceLamports: priceLamportsStr,
       requirePayment,
       usedSignatures,
       currentUnixTime,
+      registry: providerRegistry,
       seededWallets: {
         honest: providerKeypair.publicKey.toBase58(),
         lying: lyingProviderKeypair.publicKey.toBase58(),
@@ -321,6 +339,7 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
       rpcUrl,
       arbiterKeypair: options.arbiterKeypair,
       receiptCache,
+      providerRegistry,
     })
   );
 

@@ -9,7 +9,8 @@ export interface ProviderConfig {
   specJson?: string;
   specHash?: string;
   hostedProxy?: boolean;
-  priceLamports?: number;
+  hasRegistryMetadata?: boolean;
+  priceLamports?: string;
   chainState?: OnChainProvider;
 }
 
@@ -20,7 +21,7 @@ export interface RegistryMetadata {
   specJson: string;
   specHash: string;
   hostedProxy: boolean;
-  priceLamports: number;
+  priceLamports: string | number;
   description: string;
   badge: "honest" | "lying" | "subtle" | "community";
 }
@@ -90,8 +91,8 @@ function resolveEndpointUrl(rawUrl: string, wallet: string): string {
 }
 
 /**
- * Merges live on-chain Provider accounts with seeded presets & backend registry metadata
- * so every registered Devnet provider (including newly self-registered providers) is publicly visible.
+ * Merges live on-chain Provider accounts with seeded presets & backend registry metadata.
+ * Community providers missing registry metadata retain `hasRegistryMetadata: false` so hosted calls stay blocked until published.
  */
 export function mergeProvidersWithRegistry(
   onChainProviders: OnChainProvider[],
@@ -102,7 +103,6 @@ export function mergeProvidersWithRegistry(
   const seen = new Set<string>();
   const result: ProviderConfig[] = [];
 
-  // 1. Keep seeded providers first (with live chainState attached)
   for (const seed of DEVNET_PROVIDERS) {
     seen.add(seed.wallet);
     const chain = onChainProviders.find((cp) => cp.wallet === seed.wallet);
@@ -111,13 +111,13 @@ export function mergeProvidersWithRegistry(
       ...seed,
       specJson: reg?.specJson,
       specHash: reg?.specHash || chain?.specHashHex,
-      priceLamports: reg?.priceLamports || 10_000_000,
+      priceLamports: String(reg?.priceLamports || "10000000"),
       hostedProxy: true,
+      hasRegistryMetadata: true,
       chainState: chain,
     });
   }
 
-  // 2. Append any newly registered on-chain providers (publicly visible to every visitor)
   for (const chain of onChainProviders) {
     if (seen.has(chain.wallet)) continue;
     seen.add(chain.wallet);
@@ -131,12 +131,13 @@ export function mergeProvidersWithRegistry(
       wallet: chain.wallet,
       description:
         reg?.description ||
-        "On-chain registered API provider using Justice402 Hosted Test Route.",
+        "On-chain registered provider (metadata pending in public registry).",
       badge: reg?.badge || "community",
-      specJson: reg?.specJson || DEFAULT_WEATHER_SPEC_TEMPLATE,
+      specJson: reg?.specJson,
       specHash: reg?.specHash || chain.specHashHex,
-      hostedProxy: reg ? reg.hostedProxy : true,
-      priceLamports: reg?.priceLamports || 10_000_000,
+      hostedProxy: Boolean(reg?.hostedProxy),
+      hasRegistryMetadata: Boolean(reg),
+      priceLamports: String(reg?.priceLamports || "10000000"),
       chainState: chain,
     });
   }

@@ -3,17 +3,19 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
-import { PublicKey } from "@solana/web3.js";
+import { DEFAULT_WEATHER_SPEC_TEMPLATE } from "../lib/providers-config";
 import {
-  DEFAULT_WEATHER_SPEC_TEMPLATE,
-} from "../lib/providers-config";
-import { buildRegisterProviderTransaction, getProviderPda } from "../lib/dispute-client";
+  buildRegisterProviderTransaction,
+  getExistingWsolBalance,
+  getProviderPda,
+} from "../lib/dispute-client";
 import { sha256, toHex } from "../lib/receipt-browser";
 import { MIN_INSURED_BOND_SOL, OnChainProvider } from "../lib/solana";
 import { useToast } from "./Toast";
 
 const DEFAULT_PROVIDER_URL =
   process.env.NEXT_PUBLIC_PROVIDER_API_URL || "http://127.0.0.1:3402";
+const ATA_RENT_LAMPORTS = 2_039_280n;
 
 export default function RegisterProviderTab({
   onChainProviders,
@@ -26,7 +28,7 @@ export default function RegisterProviderTab({
   onGoToProviders: () => void;
   isLocalhostRpc: boolean;
 }) {
-  const { publicKey, connected, sendTransaction } = useWallet();
+  const { publicKey, connected, sendTransaction, signMessage } = useWallet();
   const { setVisible } = useWalletModal();
   const { connection } = useConnection();
   const { toast } = useToast();
@@ -46,7 +48,6 @@ export default function RegisterProviderTab({
     ? onChainProviders.find((p) => p.wallet === publicKey.toBase58())
     : undefined;
 
-  // Compute deterministic SHA-256 specHash whenever specJson edits
   useEffect(() => {
     let active = true;
     (async () => {
@@ -70,8 +71,9 @@ export default function RegisterProviderTab({
     };
   }, [specJson]);
 
-  const parsedStakeSol = parseFloat(stakeSol) || 0;
-  const isUnderMinimumBond = parsedStakeSol < MIN_INSURED_BOND_SOL;
+  const parsedStakeSol = parseFloat(stakeSol);
+  const effectiveStakeSol = Number.isFinite(parsedStakeSol) ? parsedStakeSol : 0;
+  const isUnderMinimumBond = effectiveStakeSol < MIN_INSURED_BOND_SOL;
 
   const explorerTx = (sig: string) =>
     isLocalhostRpc
@@ -83,6 +85,13 @@ export default function RegisterProviderTab({
       e.preventDefault();
       if (!connected || !publicKey) {
         setVisible(true);
+        return;
+      }
+      if (!signMessage) {
+        toast({
+          type: "error",
+          text: "Connected wallet must support signMessage to publish verified registry metadata.",
+        });
         return;
       }
       if (specError) {
@@ -100,8 +109,8 @@ export default function RegisterProviderTab({
         });
         return;
       }
-      if (parsedStakeSol < 0) {
-        toast({ type: "error", text: "Initial stake cannot be negative." });
+      if (!Number.isFinite(parsedStakeSol) || parsedStakeSol < 0) {
+        toast({ type: "error", text: "Initial stake must be zero or positive." });
         return;
       }
 
@@ -111,18 +120,29 @@ export default function RegisterProviderTab({
       try {
         const canonicalSpec = JSON.stringify(JSON.parse(specJson));
         const specHashBytes = await sha256(canonicalSpec);
+        const computedSpecHashHex = toHex(specHashBytes);
         const bondLamports = BigInt(Math.round(parsedStakeSol * 1_000_000_000));
+        const walletStr = publicKey.toBase58();
 
-        // Check on-chain PDA so we avoid AccountAlreadyInUse if user already registered
         const pda = getProviderPda(publicKey);
         const existingInfo = await connection.getAccountInfo(pda);
 
         let txSig: string | null = null;
         if (!existingInfo) {
-          const walletBal = await connection.getBalance(publicKey);
-          if (walletBal < Number(bondLamports) + 5_000_000) {
+          const [walletBal, wsolState] = await Promise.all([
+            connection.getBalance(publicKey),
+            getExistingWsolBalance(connection, publicKey),
+          ]);
+          const shortfallLamports =
+            bondLamports > wsolState.existingWsol
+              ? bondLamports - wsolState.existingWsol
+              : 0n;
+          const requiredNativeLamports =
+            shortfallLamports + (wsolState.ataExists ? 0n : ATA_RENT_LAMPORTS) + 5_000_000n;
+
+          if (BigInt(walletBal) < requiredNativeLamports) {
             throw new Error(
-              `Insufficient SOL balance (${(walletBal / 1e9).toFixed(4)} SOL). Click "+ 1 SOL" in the header first.`
+              `Insufficient native SOL (${(walletBal / 1e9).toFixed(4)} SOL; need ${(Number(requiredNativeLamports) / 1e9).toFixed(4)} SOL after counting ${(Number(wsolState.existingWsol) / 1e9).toFixed(4)} existing wSOL). Click "+ 1 SOL" first.`
             );
           }
 
@@ -134,7 +154,7 @@ export default function RegisterProviderTab({
           });
 
           txSig = await sendTransaction(transaction, connection);
-          await connection.confirmTransaction(
+          const conf = await connection.confirmTransaction(
             {
               signature: txSig,
               blockhash: transaction.recentBlockhash!,
@@ -142,21 +162,53 @@ export default function RegisterProviderTab({
             },
             "confirmed"
           );
+          if (conf.value.err) {
+            throw new Error(`Registration transaction failed: ${JSON.stringify(conf.value.err)}`);
+          }
           setLastTxSig(txSig);
         }
 
-        // Save public provider metadata to Render registry
+        // Request single-use registry challenge and sign metadata ownership proof
+        const chRes = await fetch(
+          `${DEFAULT_PROVIDER_URL}/providers/registry/challenge?wallet=${encodeURIComponent(walletStr)}`
+        );
+        const chData = await chRes.json();
+        if (!chRes.ok || !chData.nonce) {
+          throw new Error(chData.error || "Failed to fetch registry challenge");
+        }
+
+        const resolvedEndpoint = useHostedProxy
+          ? `/providers/hosted/${walletStr}`
+          : endpointUrl.trim();
+        const priceLamports = "10000000";
+
+        const signedPayload = new TextEncoder().encode(
+          JSON.stringify({
+            action: "justice402-register-metadata",
+            wallet: walletStr,
+            name: name.trim().slice(0, 80),
+            endpointUrl: resolvedEndpoint,
+            specHash: computedSpecHashHex,
+            priceLamports,
+            nonce: String(chData.nonce),
+          })
+        );
+        const sigBytes = await signMessage(signedPayload);
+        const signatureBase64 = btoa(String.fromCharCode(...Array.from(sigBytes)));
+
         const regRes = await fetch(`${DEFAULT_PROVIDER_URL}/providers/registry`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            wallet: publicKey.toBase58(),
+            wallet: walletStr,
             name: name.trim(),
             endpointUrl: useHostedProxy ? undefined : endpointUrl.trim(),
             specJson: canonicalSpec,
             hostedProxy: useHostedProxy,
             description: description.trim() || undefined,
-            priceLamports: 10_000_000,
+            priceLamports,
+            nonce: chData.nonce,
+            signatureBase64,
           }),
         });
         const regData = await regRes.json();
@@ -187,6 +239,7 @@ export default function RegisterProviderTab({
     [
       connected,
       publicKey,
+      signMessage,
       specError,
       name,
       useHostedProxy,
@@ -245,10 +298,14 @@ export default function RegisterProviderTab({
         <form onSubmit={handleRegister} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-mono text-zinc-400 mb-1.5">
+              <label
+                htmlFor="provider-wallet-input"
+                className="block text-xs font-mono text-zinc-400 mb-1.5"
+              >
                 Provider Wallet (Connected Signer)
               </label>
               <input
+                id="provider-wallet-input"
                 type="text"
                 readOnly
                 value={publicKey ? publicKey.toBase58() : "Connect wallet in header…"}
@@ -257,10 +314,14 @@ export default function RegisterProviderTab({
             </div>
 
             <div>
-              <label className="block text-xs font-mono text-zinc-400 mb-1.5">
+              <label
+                htmlFor="provider-name-input"
+                className="block text-xs font-mono text-zinc-400 mb-1.5"
+              >
                 Provider Display Name *
               </label>
               <input
+                id="provider-name-input"
                 type="text"
                 required
                 placeholder="e.g., Pacific Weather Oracle"
@@ -271,10 +332,13 @@ export default function RegisterProviderTab({
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-mono text-zinc-400 mb-1.5">
+          <div role="group" aria-labelledby="endpoint-mode-label">
+            <span
+              id="endpoint-mode-label"
+              className="block text-xs font-mono text-zinc-400 mb-1.5"
+            >
               Endpoint Mode
-            </label>
+            </span>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
               <button
                 type="button"
@@ -310,14 +374,20 @@ export default function RegisterProviderTab({
             </div>
 
             {!useHostedProxy ? (
-              <input
-                type="url"
-                required
-                placeholder="https://your-api.example.com/weather"
-                value={endpointUrl}
-                onChange={(e) => setEndpointUrl(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-white/10 text-xs font-mono text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500/50"
-              />
+              <div>
+                <label htmlFor="custom-endpoint-input" className="sr-only">
+                  Custom x402 API Endpoint URL
+                </label>
+                <input
+                  id="custom-endpoint-input"
+                  type="url"
+                  required
+                  placeholder="https://your-api.example.com/weather"
+                  value={endpointUrl}
+                  onChange={(e) => setEndpointUrl(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-white/10 text-xs font-mono text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500/50"
+                />
+              </div>
             ) : (
               <div className="px-3 py-2 rounded-lg bg-zinc-950/60 border border-white/10 text-xs font-mono text-emerald-300 truncate">
                 {publicKey
@@ -329,11 +399,15 @@ export default function RegisterProviderTab({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-mono text-zinc-400 mb-1.5">
+              <label
+                htmlFor="initial-stake-input"
+                className="block text-xs font-mono text-zinc-400 mb-1.5"
+              >
                 Initial Stake Amount (SOL) *
               </label>
               <div className="flex items-center gap-2">
                 <input
+                  id="initial-stake-input"
                   type="number"
                   step="0.005"
                   min="0"
@@ -361,10 +435,14 @@ export default function RegisterProviderTab({
             </div>
 
             <div>
-              <label className="block text-xs font-mono text-zinc-400 mb-1.5">
+              <label
+                htmlFor="provider-desc-input"
+                className="block text-xs font-mono text-zinc-400 mb-1.5"
+              >
                 Short Service Description
               </label>
               <input
+                id="provider-desc-input"
                 type="text"
                 placeholder="e.g., High-frequency SolanaBeach weather metrics"
                 value={description}
@@ -376,7 +454,10 @@ export default function RegisterProviderTab({
 
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-mono text-zinc-400">
+              <label
+                htmlFor="provider-spec-textarea"
+                className="text-xs font-mono text-zinc-400"
+              >
                 Service Spec & JSON Schema Rules
               </label>
               <button
@@ -388,6 +469,7 @@ export default function RegisterProviderTab({
               </button>
             </div>
             <textarea
+              id="provider-spec-textarea"
               rows={9}
               value={specJson}
               onChange={(e) => setSpecJson(e.target.value)}
@@ -409,10 +491,10 @@ export default function RegisterProviderTab({
               className="px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-medium transition-colors disabled:opacity-50"
             >
               {submitting
-                ? "Submitting register_provider on Devnet…"
+                ? "Submitting on Devnet…"
                 : existingProvider
-                ? "Update Public Registry Metadata"
-                : `Stake ${parsedStakeSol.toFixed(4)} SOL & Register Provider`}
+                ? "Sign & Update Public Registry Metadata"
+                : `Stake ${effectiveStakeSol.toFixed(4)} SOL & Register Provider`}
             </button>
             {lastTxSig && (
               <a
@@ -452,4 +534,3 @@ export default function RegisterProviderTab({
     </section>
   );
 }
-

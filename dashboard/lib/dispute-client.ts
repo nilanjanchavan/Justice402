@@ -22,6 +22,7 @@ import { PROGRAM_ID } from "./solana";
 import { ReceiptDataBrowser, encodeReceiptBrowser, sha256 } from "./receipt-browser";
 
 const te = new TextEncoder();
+const U64_MAX = 18446744073709551615n;
 
 export const CONFIG_PDA = PublicKey.findProgramAddressSync([te.encode("config")], PROGRAM_ID)[0];
 export const VAULT_PDA = PublicKey.findProgramAddressSync(
@@ -58,67 +59,99 @@ function readU64LE(arr: Uint8Array, offset: number): bigint {
 }
 
 function writeU64LE(val: bigint): Uint8Array {
+  if (val < 0n || val > U64_MAX) {
+    throw new Error(`Value ${val.toString()} is outside supported u64 range`);
+  }
   const buf = new Uint8Array(8);
   new DataView(buf.buffer).setBigUint64(0, val, true);
   return buf;
 }
 
 async function getOnChainDisputeDeposit(connection: Connection): Promise<bigint> {
-  try {
-    const info = await connection.getAccountInfo(CONFIG_PDA);
-    if (info && info.data.length >= 112) {
-      return readU64LE(info.data, 104);
-    }
-  } catch {
-    // fallback below
+  const info = await connection.getAccountInfo(CONFIG_PDA);
+  if (info && info.data.length >= 112) {
+    return readU64LE(info.data, 104);
   }
   return 10_000_000n;
 }
 
 /**
- * Shared helper to ensure a wallet's wSOL ATA exists and holds at least `requiredLamports`.
+ * Queries existing wSOL balance strictly: returns 0n ONLY when ATA is confirmed absent,
+ * and propagates RPC balance-read failures instead of masking them as 0n.
+ */
+export async function getExistingWsolBalance(
+  connection: Connection,
+  owner: PublicKey
+): Promise<{ ata: PublicKey; ataExists: boolean; existingWsol: bigint }> {
+  const ata = await getAssociatedTokenAddress(NATIVE_MINT, owner);
+  const ataInfo = await connection.getAccountInfo(ata);
+  if (!ataInfo) {
+    return { ata, ataExists: false, existingWsol: 0n };
+  }
+
+  let lastErr: any;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const bal = await connection.getTokenAccountBalance(ata);
+      return {
+        ata,
+        ataExists: true,
+        existingWsol: BigInt(bal.value.amount),
+      };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw new Error(
+    `Unable to read existing wSOL balance for ${ata.toBase58()}: ${lastErr?.message || lastErr}`
+  );
+}
+
+/**
+ * Builds instructions to ensure wSOL ATA exists and covers `requiredLamports` without rounding.
  */
 async function buildWsolShortfallInstructions(
   connection: Connection,
   owner: PublicKey,
   requiredLamports: bigint
-): Promise<{ ata: PublicKey; instructions: TransactionInstruction[] }> {
-  const ata = await getAssociatedTokenAddress(NATIVE_MINT, owner);
+): Promise<{ ata: PublicKey; instructions: TransactionInstruction[]; shortfall: bigint }> {
+  if (requiredLamports < 0n || requiredLamports > U64_MAX) {
+    throw new Error("Requested lamport amount is outside u64 range");
+  }
+
+  const { ata, ataExists, existingWsol } = await getExistingWsolBalance(connection, owner);
   const instructions: TransactionInstruction[] = [];
 
-  let existingWsol = 0n;
-  const ataInfo = await connection.getAccountInfo(ata);
-  if (!ataInfo) {
+  if (!ataExists) {
     instructions.push(
       createAssociatedTokenAccountInstruction(owner, ata, owner, NATIVE_MINT)
     );
-  } else {
-    try {
-      const bal = await connection.getTokenAccountBalance(ata);
-      existingWsol = BigInt(bal.value.amount || "0");
-    } catch {
-      existingWsol = 0n;
-    }
   }
 
+  let shortfall = 0n;
   if (existingWsol < requiredLamports) {
-    const shortfall = Number(requiredLamports - existingWsol);
+    shortfall = requiredLamports - existingWsol;
+    if (shortfall > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error(
+        `Transfer shortfall ${shortfall.toString()} lamports exceeds SystemProgram.transfer safe integer precision`
+      );
+    }
     instructions.push(
       SystemProgram.transfer({
         fromPubkey: owner,
         toPubkey: ata,
-        lamports: shortfall,
+        lamports: Number(shortfall),
       }),
       createSyncNativeInstruction(ata)
     );
   }
 
-  return { ata, instructions };
+  return { ata, instructions, shortfall };
 }
 
 /**
  * Builds open_dispute transaction. Splits wSOL ATA wrap into `prepareTransaction`
- * so the Ed25519 + open_dispute transaction always fits well below Solana's 1232-byte MTU limit.
+ * so the Ed25519 + open_dispute transaction stays below Solana's 1232-byte MTU limit.
  */
 export async function buildOpenDisputeTransaction(params: {
   connection: Connection;
@@ -212,6 +245,9 @@ export async function buildRegisterProviderTransaction(params: {
 }): Promise<{ transaction: Transaction; providerPda: PublicKey }> {
   const { connection, providerWallet, bondLamports, specHash } = params;
   if (specHash.length !== 32) throw new Error("specHash must be 32 bytes");
+  if (bondLamports < 0n || bondLamports > U64_MAX) {
+    throw new Error("Bond amount is outside supported u64 range");
+  }
 
   const providerPda = getProviderPda(providerWallet);
   const { ata: providerAta, instructions: wrapIxs } = await buildWsolShortfallInstructions(
@@ -260,7 +296,9 @@ export async function buildTopUpTransaction(params: {
   amountLamports: bigint;
 }): Promise<Transaction> {
   const { connection, providerWallet, amountLamports } = params;
-  if (amountLamports <= 0n) throw new Error("Top-up amount must be greater than 0");
+  if (amountLamports <= 0n || amountLamports > U64_MAX) {
+    throw new Error("Top-up amount must be within valid u64 range (> 0)");
+  }
 
   const providerPda = getProviderPda(providerWallet);
   const { ata: providerAta, instructions: wrapIxs } = await buildWsolShortfallInstructions(

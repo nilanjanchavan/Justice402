@@ -9,7 +9,6 @@ import { useToast } from "./Toast";
 
 const DEFAULT_PROVIDER_URL =
   process.env.NEXT_PUBLIC_PROVIDER_API_URL || "http://127.0.0.1:3402";
-const ENV_PORTAL_WALLET = (process.env.NEXT_PUBLIC_ARBITER_PORTAL_WALLET || "").trim();
 
 interface ArbiterStatusInfo {
   configured: boolean;
@@ -34,7 +33,7 @@ export default function ArbiterTab({
   onRunUpdate: (runData: any) => void;
   isLocalhostRpc: boolean;
 }) {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected, signMessage } = useWallet();
   const { setVisible } = useWalletModal();
   const { toast } = useToast();
 
@@ -42,29 +41,37 @@ export default function ArbiterTab({
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [authExpiresAt, setAuthExpiresAt] = useState<number>(0);
   const [unlocking, setUnlocking] = useState(false);
+
   const [statusInfo, setStatusInfo] = useState<ArbiterStatusInfo | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [statusError, setStatusError] = useState<string | null>(null);
 
   const [audits, setAudits] = useState<Record<string, any>>({});
-  const [auditingPda, setAuditingPda] = useState<string | null>(null);
-  const [settlingPda, setSettlingPda] = useState<string | null>(null);
+  const [auditingPdas, setAuditingPdas] = useState<Set<string>>(() => new Set());
+  const [settlingPdas, setSettlingPdas] = useState<Set<string>>(() => new Set());
   const [manualPayloads, setManualPayloads] = useState<Record<string, string>>({});
   const [showResolved, setShowResolved] = useState(false);
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
 
   const connectedAddress = publicKey?.toBase58() || "";
-  const authorizedArbiter = statusInfo?.portalArbiterWallet || ENV_PORTAL_WALLET;
+  const authorizedArbiter = statusInfo?.portalArbiterWallet || "";
   const isAuthorizedWallet = Boolean(
     authorizedArbiter && connected && connectedAddress === authorizedArbiter
   );
 
   const fetchBackendStatus = useCallback(async () => {
+    setStatusLoading(true);
+    setStatusError(null);
     try {
       const res = await fetch(`${DEFAULT_PROVIDER_URL}/arbiter/status`);
-      if (res.ok) {
-        const data = await res.json();
-        setStatusInfo(data);
-      }
-    } catch {
-      // ignore
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setStatusInfo(data);
+    } catch (err: any) {
+      setStatusInfo(null);
+      setStatusError(err?.message || "Unable to reach arbiter status endpoint");
+    } finally {
+      setStatusLoading(false);
     }
   }, []);
 
@@ -72,11 +79,28 @@ export default function ArbiterTab({
     fetchBackendStatus();
   }, [fetchBackendStatus]);
 
-  // Clear session token if connected wallet switches away from authorized arbiter
+  // Shared 1s clock while portal workbench is unlocked so deadlines & button states stay live
   useEffect(() => {
-    if (authToken && (!isAuthorizedWallet || Date.now() > authExpiresAt)) {
+    if (!authToken) return;
+    setNowSec(Math.floor(Date.now() / 1000));
+    const interval = setInterval(() => {
+      setNowSec(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [authToken]);
+
+  // Immediately clear expired/wrong-wallet tokens and schedule timer at authExpiresAt
+  useEffect(() => {
+    if (!authToken) return;
+    const msLeft = authExpiresAt - Date.now();
+    if (!isAuthorizedWallet || msLeft <= 0) {
       setAuthToken(null);
+      return;
     }
+    const timer = setTimeout(() => {
+      setAuthToken(null);
+    }, msLeft);
+    return () => clearTimeout(timer);
   }, [authToken, isAuthorizedWallet, authExpiresAt]);
 
   const handleUnlock = async (e: React.FormEvent) => {
@@ -94,15 +118,36 @@ export default function ArbiterTab({
       });
       return;
     }
+    if (!signMessage) {
+      toast({
+        type: "error",
+        text: "Connected wallet must support signMessage to prove arbiter ownership.",
+      });
+      return;
+    }
 
     setUnlocking(true);
     try {
+      const chRes = await fetch(
+        `${DEFAULT_PROVIDER_URL}/arbiter/challenge?wallet=${encodeURIComponent(connectedAddress)}`
+      );
+      const chData = await chRes.json();
+      if (!chRes.ok || !chData.nonce || !chData.message) {
+        throw new Error(chData.error || `Challenge error (${chRes.status})`);
+      }
+
+      const msgBytes = new TextEncoder().encode(chData.message);
+      const sigBytes = await signMessage(msgBytes);
+      const signatureBase64 = btoa(String.fromCharCode(...Array.from(sigBytes)));
+
       const res = await fetch(`${DEFAULT_PROVIDER_URL}/arbiter/auth`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           password,
           walletAddress: connectedAddress,
+          nonce: chData.nonce,
+          signatureBase64,
         }),
       });
       const data = await res.json();
@@ -115,14 +160,18 @@ export default function ArbiterTab({
       setPassword("");
       toast({ type: "success", text: "Arbiter Portal unlocked." });
     } catch (err: any) {
-      toast({ type: "error", text: err?.message || "Failed to authenticate" });
+      const msg = err?.message || "Failed to authenticate";
+      toast({
+        type: msg.toLowerCase().includes("user rejected") ? "warning" : "error",
+        text: msg,
+      });
     } finally {
       setUnlocking(false);
     }
   };
 
   const handleAuditPreview = async (dispute: OnChainDispute) => {
-    setAuditingPda(dispute.pda);
+    setAuditingPdas((prev) => new Set(prev).add(dispute.pda));
     try {
       const cached = getDisputeEvidence(dispute.pda);
       let payload = cached?.responsePayload;
@@ -152,7 +201,11 @@ export default function ArbiterTab({
     } catch (err: any) {
       toast({ type: "error", text: err?.message || "Audit error" });
     } finally {
-      setAuditingPda(null);
+      setAuditingPdas((prev) => {
+        const next = new Set(prev);
+        next.delete(dispute.pda);
+        return next;
+      });
     }
   };
 
@@ -160,12 +213,24 @@ export default function ArbiterTab({
     dispute: OnChainDispute,
     ruling: "BuyerWins" | "ProviderWins"
   ) => {
-    if (!authToken || !isAuthorizedWallet) {
-      toast({ type: "error", text: "Authenticate as Arbiter first." });
+    const requestToken = authToken;
+    if (!requestToken || !isAuthorizedWallet || Date.now() >= authExpiresAt) {
+      setAuthToken(null);
+      toast({ type: "error", text: "Arbiter session expired or missing. Unlock again." });
       return;
     }
 
-    setSettlingPda(dispute.pda);
+    const resolveTimeout = onChainConfig?.resolveTimeoutSec || 180;
+    const deadline = dispute.openedAt + resolveTimeout;
+    if (Math.floor(Date.now() / 1000) >= deadline) {
+      toast({
+        type: "warning",
+        text: "Resolve timeout elapsed for this dispute — use Claim Timeout Refund instead.",
+      });
+      return;
+    }
+
+    setSettlingPdas((prev) => new Set(prev).add(dispute.pda));
     try {
       const cached = getDisputeEvidence(dispute.pda);
       let payload = cached?.responsePayload;
@@ -177,7 +242,7 @@ export default function ArbiterTab({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Arbiter-Token": authToken,
+          "X-Arbiter-Token": requestToken,
           "X-Arbiter-Wallet": connectedAddress,
         },
         body: JSON.stringify({
@@ -189,7 +254,9 @@ export default function ArbiterTab({
       });
       const data = await res.json();
       if (!res.ok) {
-        if (res.status === 401) setAuthToken(null);
+        if (res.status === 401) {
+          setAuthToken((cur) => (cur === requestToken ? null : cur));
+        }
         throw new Error(data.error || `Resolution failed (${res.status})`);
       }
 
@@ -238,31 +305,47 @@ export default function ArbiterTab({
     } catch (err: any) {
       toast({ type: "error", text: err?.message || "Failed to settle dispute" });
     } finally {
-      setSettlingPda(null);
+      setSettlingPdas((prev) => {
+        const next = new Set(prev);
+        next.delete(dispute.pda);
+        return next;
+      });
     }
   };
 
-  const onChainArbiter =
-    onChainConfig?.arbiter || statusInfo?.onChainConfigArbiter || "Loading…";
-  const configMatchesPortal = Boolean(authorizedArbiter && onChainArbiter === authorizedArbiter);
+  const resolvedConfigArbiter =
+    onChainConfig?.arbiter || statusInfo?.onChainConfigArbiter || null;
+  const configKnown = Boolean(resolvedConfigArbiter);
+  const configMatchesPortal = Boolean(
+    configKnown && authorizedArbiter && resolvedConfigArbiter === authorizedArbiter
+  );
   const openDisputes = disputes.filter((d) => d.status === "Open");
   const visibleDisputes = showResolved ? disputes : openDisputes;
 
   return (
     <section className="space-y-6">
-      {/* On-Chain Config Notice Banner */}
+      {/* On-Chain Config Status Banner */}
       <div className="bg-zinc-900/50 border border-white/10 rounded-xl p-4 text-xs font-mono space-y-1.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-zinc-400">
             Global Config (<span className="text-zinc-200">{CONFIG_PDA.toBase58().slice(0, 8)}…</span>) On-Chain Arbiter:
           </span>
-          <span className={configMatchesPortal ? "text-emerald-300" : "text-amber-300"}>
-            {onChainArbiter}
+          <span
+            className={
+              !configKnown
+                ? "text-zinc-400"
+                : configMatchesPortal
+                ? "text-emerald-300"
+                : "text-amber-300"
+            }
+          >
+            {resolvedConfigArbiter ||
+              (statusLoading ? "Fetching Config…" : "Unavailable (RPC/API pending)")}
           </span>
         </div>
-        {!configMatchesPortal && (
+        {configKnown && authorizedArbiter && !configMatchesPortal && (
           <p className="text-[11px] text-amber-200/90 leading-relaxed">
-            Notice: On-chain Config currently authorizes <code className="text-white">{onChainArbiter}</code> (backend <code className="text-white">ARBITER_SECRET_KEY</code>). Once you unlock this portal with the designated portal arbiter wallet and <code className="text-white">ARBITER_PORTAL_PASSWORD</code>, rulings settle via the authorized Config signer. To allow direct browser signing by the portal wallet, the Anchor program would need a Config arbiter update / re-initialization.
+            Notice: On-chain Config currently authorizes <code className="text-white">{resolvedConfigArbiter}</code> (backend <code className="text-white">ARBITER_SECRET_KEY</code>). Once you unlock this portal with the designated portal wallet and <code className="text-white">ARBITER_PORTAL_PASSWORD</code>, rulings settle via the authorized Config signer. To allow direct browser signing by the portal wallet, the Anchor program would need a Config arbiter update / re-initialization.
           </p>
         )}
       </div>
@@ -274,11 +357,12 @@ export default function ArbiterTab({
               Password-Gated Arbiter Portal
             </h2>
             <p className="text-xs text-zinc-400 mt-1">
-              Restricted exclusively to designated arbiter wallet{" "}
+              Restricted exclusively to the configured portal arbiter wallet{" "}
               <code className="font-mono text-zinc-200 break-all">
-                {authorizedArbiter || "(configure ARBITER_PORTAL_WALLET on Render)"}
-              </code>{" "}
-              and verified server-side against <code className="font-mono text-zinc-200">ARBITER_PORTAL_PASSWORD</code>.
+                {authorizedArbiter ||
+                  (statusLoading ? "(checking backend…)" : "(unavailable)")}
+              </code>
+              , verified server-side via wallet signature + <code className="font-mono text-zinc-200">ARBITER_PORTAL_PASSWORD</code>.
             </p>
           </div>
 
@@ -286,11 +370,21 @@ export default function ArbiterTab({
             <div className="flex items-center justify-between gap-2">
               <span className="text-zinc-500">Connected Wallet</span>
               {connected ? (
-                <span className={isAuthorizedWallet ? "text-emerald-300" : "text-rose-300"}>
+                <span
+                  className={
+                    isAuthorizedWallet
+                      ? "text-emerald-300"
+                      : !authorizedArbiter
+                      ? "text-zinc-400"
+                      : "text-rose-300"
+                  }
+                >
                   {isAuthorizedWallet
                     ? `✓ Authorized (${connectedAddress.slice(0, 6)}…${connectedAddress.slice(-4)})`
                     : !authorizedArbiter
-                    ? `⚠ Portal wallet env unset`
+                    ? statusLoading
+                      ? "Checking backend…"
+                      : "Portal wallet status unavailable"
                     : `✕ Wrong Wallet (${connectedAddress.slice(0, 6)}…${connectedAddress.slice(-4)})`}
                 </span>
               ) : (
@@ -303,26 +397,44 @@ export default function ArbiterTab({
                 </button>
               )}
             </div>
+
             <div className="flex items-center justify-between gap-2">
               <span className="text-zinc-500">Backend Portal Wallet Env</span>
               <span
                 className={
-                  authorizedArbiter ? "text-emerald-300" : "text-amber-300"
+                  statusLoading || statusError
+                    ? "text-zinc-400"
+                    : statusInfo?.portalWalletConfigured
+                    ? "text-emerald-300"
+                    : "text-amber-300"
                 }
               >
-                {authorizedArbiter
+                {statusLoading
+                  ? "Checking…"
+                  : statusError
+                  ? "Unavailable (backend unreachable)"
+                  : statusInfo?.portalWalletConfigured && authorizedArbiter
                   ? `✓ ${authorizedArbiter.slice(0, 6)}…${authorizedArbiter.slice(-4)}`
                   : "⚠ Set ARBITER_PORTAL_WALLET on Render"}
               </span>
             </div>
+
             <div className="flex items-center justify-between gap-2">
               <span className="text-zinc-500">Backend Portal Password Env</span>
               <span
                 className={
-                  statusInfo?.portalPasswordConfigured ? "text-emerald-300" : "text-amber-300"
+                  statusLoading || statusError
+                    ? "text-zinc-400"
+                    : statusInfo?.portalPasswordConfigured
+                    ? "text-emerald-300"
+                    : "text-amber-300"
                 }
               >
-                {statusInfo?.portalPasswordConfigured
+                {statusLoading
+                  ? "Checking…"
+                  : statusError
+                  ? "Unavailable (backend unreachable)"
+                  : statusInfo?.portalPasswordConfigured
                   ? "✓ Configured"
                   : "⚠ Set ARBITER_PORTAL_PASSWORD on Render"}
               </span>
@@ -331,10 +443,14 @@ export default function ArbiterTab({
 
           <form onSubmit={handleUnlock} className="space-y-3">
             <div>
-              <label className="block text-xs font-mono text-zinc-400 mb-1.5">
+              <label
+                htmlFor="arbiter-portal-password"
+                className="block text-xs font-mono text-zinc-400 mb-1.5"
+              >
                 Arbiter Portal Password
               </label>
               <input
+                id="arbiter-portal-password"
                 type="password"
                 required
                 placeholder="Enter ARBITER_PORTAL_PASSWORD…"
@@ -349,7 +465,9 @@ export default function ArbiterTab({
               disabled={unlocking || !isAuthorizedWallet}
               className="w-full px-4 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-mono font-medium transition-colors disabled:opacity-50"
             >
-              {unlocking ? "Verifying with Render Backend…" : "🔓 Unlock Arbiter Workbench"}
+              {unlocking
+                ? "Sign Challenge & Verify with Backend…"
+                : "🔓 Sign Challenge & Unlock Arbiter Workbench"}
             </button>
           </form>
         </div>
@@ -395,7 +513,9 @@ export default function ArbiterTab({
                 const isOpen = d.status === "Open";
                 const resolveTimeout = onChainConfig?.resolveTimeoutSec || 180;
                 const deadline = d.openedAt + resolveTimeout;
-                const remainingSec = deadline - Math.floor(Date.now() / 1000);
+                const remainingSec = deadline - nowSec;
+                const isAuditing = auditingPdas.has(d.pda);
+                const isSettling = settlingPdas.has(d.pda);
 
                 return (
                   <div
@@ -444,10 +564,14 @@ export default function ArbiterTab({
                       <div className="space-y-3 pt-3 border-t border-white/[0.06]">
                         {!cachedEvidence && (
                           <div>
-                            <label className="block text-[11px] font-mono text-zinc-500 mb-1">
+                            <label
+                              htmlFor={`evidence-${d.pda}`}
+                              className="block text-[11px] font-mono text-zinc-500 mb-1"
+                            >
                               Optional Evidence JSON Override (if not auto-cached on server)
                             </label>
                             <input
+                              id={`evidence-${d.pda}`}
                               type="text"
                               placeholder='{"city":"SolanaBeach","temperature":9999,"humidity":-50,"observedAt":...}'
                               value={manualPayloads[d.pda] || ""}
@@ -467,10 +591,12 @@ export default function ArbiterTab({
                                 className={
                                   audit.recommendedRuling === "BuyerWins"
                                     ? "text-rose-300 font-semibold"
-                                    : "text-emerald-300 font-semibold"
+                                    : audit.recommendedRuling === "ProviderWins"
+                                    ? "text-emerald-300 font-semibold"
+                                    : "text-amber-300 font-semibold"
                                 }
                               >
-                                Recommended: {audit.recommendedRuling}
+                                Recommended: {audit.recommendedRuling || "None (Commitment Mismatch)"}
                               </span>
                             </div>
                             <pre className="text-[11px] font-mono text-zinc-300 overflow-x-auto">
@@ -483,19 +609,19 @@ export default function ArbiterTab({
                           <button
                             type="button"
                             onClick={() => handleAuditPreview(d)}
-                            disabled={auditingPda === d.pda}
+                            disabled={isAuditing}
                             className="px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-white/10 text-xs font-mono text-zinc-200 transition-colors disabled:opacity-50"
                           >
-                            {auditingPda === d.pda ? "Auditing…" : "🔍 Run Deterministic Audit"}
+                            {isAuditing ? "Auditing…" : "🔍 Run Deterministic Audit"}
                           </button>
 
                           <button
                             type="button"
                             onClick={() => handleSettleDispute(d, "BuyerWins")}
-                            disabled={settlingPda === d.pda || remainingSec <= 0}
+                            disabled={isSettling || remainingSec <= 0}
                             className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-mono text-white font-medium transition-colors disabled:opacity-50"
                           >
-                            {settlingPda === d.pda
+                            {isSettling
                               ? "Signing…"
                               : "✓ Settle BuyerWins (Slash Provider)"}
                           </button>
@@ -503,10 +629,10 @@ export default function ArbiterTab({
                           <button
                             type="button"
                             onClick={() => handleSettleDispute(d, "ProviderWins")}
-                            disabled={settlingPda === d.pda || remainingSec <= 0}
+                            disabled={isSettling || remainingSec <= 0}
                             className="px-3 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-white/10 text-xs font-mono text-zinc-300 transition-colors disabled:opacity-50"
                           >
-                            Settle ProviderWins (Dismiss)
+                            {isSettling ? "Signing…" : "Settle ProviderWins (Dismiss)"}
                           </button>
                         </div>
                       </div>
@@ -521,4 +647,3 @@ export default function ArbiterTab({
     </section>
   );
 }
-
