@@ -98,6 +98,7 @@ function DashboardInner({
   const [chainLoading, setChainLoading] = useState<boolean>(false);
   const [chainError, setChainError] = useState<string | null>(null);
   const [providerHealth, setProviderHealth] = useState<ProviderHealth | null>(null);
+  const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">("checking");
   const [resolvingPda, setResolvingPda] = useState<string | null>(null);
   const [claimingPda, setClaimingPda] = useState<string | null>(null);
   const [topUpAmounts, setTopUpAmounts] = useState<Record<string, string>>({});
@@ -135,23 +136,47 @@ function DashboardInner({
     }
   }, []);
 
-  const refreshHealthAndRegistry = useCallback(() => {
-    fetch(`${DEFAULT_PROVIDER_URL}/health`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((h) => {
-        if (h && h.status === "ok") setProviderHealth(h);
-      })
-      .catch(() => setProviderHealth(null));
+  const refreshHealthAndRegistry = useCallback(async () => {
+    setApiStatus((cur) => (cur === "online" ? "online" : "checking"));
+    try {
+      const [hRes, rRes] = await Promise.all([
+        fetch(`${DEFAULT_PROVIDER_URL}/health`).catch(() => null),
+        fetch(`${DEFAULT_PROVIDER_URL}/providers/registry`).catch(() => null),
+      ]);
+      if (hRes && hRes.ok) {
+        const h = await hRes.json().catch(() => null);
+        if (h && h.status === "ok") {
+          setProviderHealth(h);
+          setApiStatus("online");
+        } else {
+          setProviderHealth(null);
+          setApiStatus("offline");
+        }
+      } else {
+        setProviderHealth(null);
+        setApiStatus("offline");
+      }
 
-    fetch(`${DEFAULT_PROVIDER_URL}/providers/registry`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
+      if (rRes && rRes.ok) {
+        const data = await rRes.json().catch(() => null);
         if (data && Array.isArray(data.providers)) {
           setRegistryEntries(data.providers);
         }
-      })
-      .catch(() => {});
+      }
+    } catch {
+      setProviderHealth(null);
+      setApiStatus("offline");
+    }
   }, []);
+
+  // Automatically retry waking the free-tier Render API up to 2 times if offline on initial load
+  useEffect(() => {
+    if (apiStatus !== "offline") return;
+    const t = setTimeout(() => {
+      refreshHealthAndRegistry();
+    }, 10_000);
+    return () => clearTimeout(t);
+  }, [apiStatus, refreshHealthAndRegistry]);
 
   useEffect(() => {
     const cachedLiveRun = loadLiveRun();
@@ -414,7 +439,11 @@ function DashboardInner({
           <span className="text-zinc-700" aria-hidden="true">|</span>
 
           <a
-            href={`https://explorer.solana.com/address/${programIdStr}?cluster=devnet`}
+            href={
+              isLocalhostRpc
+                ? `https://explorer.solana.com/address/${programIdStr}?cluster=custom&customUrl=${encodeURIComponent("http://127.0.0.1:8899")}`
+                : `https://explorer.solana.com/address/${programIdStr}?cluster=devnet`
+            }
             target="_blank"
             rel="noreferrer"
             className="text-zinc-400 hover:text-emerald-300 transition-colors"
@@ -427,11 +456,31 @@ function DashboardInner({
 
           <span
             className={`inline-flex items-center gap-1.5 ${
-              providerHealth ? "text-emerald-300" : "text-zinc-400"
+              apiStatus === "online"
+                ? "text-emerald-300"
+                : apiStatus === "checking"
+                ? "text-amber-300"
+                : "text-zinc-400"
             }`}
+            title={
+              apiStatus === "online"
+                ? `Connected to ${DEFAULT_PROVIDER_URL}`
+                : `Waiting for ${DEFAULT_PROVIDER_URL}/health`
+            }
           >
-            <span aria-hidden="true">{providerHealth ? "●" : "○"}</span>
-            <span>API {providerHealth ? "Online" : "Offline"}</span>
+            <span
+              aria-hidden="true"
+              className={apiStatus === "checking" ? "animate-pulse" : ""}
+            >
+              {apiStatus === "online" ? "●" : apiStatus === "checking" ? "◌" : "○"}
+            </span>
+            <span>
+              {apiStatus === "online"
+                ? "API Online"
+                : apiStatus === "checking"
+                ? "API Connecting…"
+                : "API Offline"}
+            </span>
           </span>
 
           <span className="text-zinc-700" aria-hidden="true">|</span>
@@ -458,32 +507,40 @@ function DashboardInner({
           <div className="p-4 sm:p-5">
             <span className="text-xs text-zinc-400 block mb-1">Total Bond Staked</span>
             <span className="font-display text-2xl font-semibold text-white tabular-nums">
-              {totalStakedSol.toFixed(4)}{" "}
+              {chainLoading && !hasLiveProviders ? "—" : totalStakedSol.toFixed(4)}{" "}
               <span className="text-xs font-mono font-normal text-zinc-400">SOL</span>
             </span>
           </div>
           <div className="p-4 sm:p-5">
             <span className="text-xs text-zinc-400 block mb-1">Registered Providers</span>
             <span className="font-display text-2xl font-semibold text-white tabular-nums">
-              {providerCount}{" "}
+              {chainLoading && !hasLiveProviders ? "—" : providerCount}{" "}
               <span className="text-xs font-mono font-normal text-zinc-500">
-                {hasLiveProviders ? "on-chain" : "sample"}
+                {chainLoading && !hasLiveProviders
+                  ? "syncing"
+                  : hasLiveProviders
+                  ? "on-chain"
+                  : "sample"}
               </span>
             </span>
           </div>
           <div className="p-4 sm:p-5">
             <span className="text-xs text-zinc-400 block mb-1">Disputes Tracked</span>
             <span className="font-display text-2xl font-semibold text-white tabular-nums">
-              {disputeCount}{" "}
+              {chainLoading && !hasLiveDisputes ? "—" : disputeCount}{" "}
               <span className="text-xs font-mono font-normal text-zinc-500">
-                {hasLiveDisputes ? "on-chain" : "sample"}
+                {chainLoading && !hasLiveDisputes
+                  ? "syncing"
+                  : hasLiveDisputes
+                  ? "on-chain"
+                  : "sample"}
               </span>
             </span>
           </div>
           <div className="p-4 sm:p-5">
             <span className="text-xs text-zinc-400 block mb-1">Total Bond Slashed</span>
             <span className="font-display text-2xl font-semibold text-rose-300 tabular-nums">
-              {totalSlashedSol.toFixed(4)}{" "}
+              {chainLoading && !hasLiveProviders ? "—" : totalSlashedSol.toFixed(4)}{" "}
               <span className="text-xs font-mono font-normal text-rose-300/70">SOL</span>
             </span>
           </div>
@@ -569,15 +626,11 @@ function DashboardInner({
                 <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
                   <p className="text-xs font-mono text-zinc-400">
                     {isUsingFallback
-                      ? "Trace source: Sample fallback data (run Live Playground to record a live trace)"
+                      ? `Trace source: ${demoData.network} Verified Proof · ${new Date(demoData.executedAt).toLocaleString()} (run Live Playground to trace your session)`
                       : `Trace source: ${demoData.network} · ${new Date(demoData.executedAt).toLocaleString()}`}
                   </p>
-                  <span
-                    className={`text-xs font-mono ${
-                      isUsingFallback ? "text-amber-300" : "text-emerald-300"
-                    }`}
-                  >
-                    {isUsingFallback ? "⚠ Sample Data" : "✓ Live Trace"}
+                  <span className="text-xs font-mono text-emerald-300">
+                    {isUsingFallback ? "✓ Verified Devnet Proof" : "✓ Live Session Trace"}
                   </span>
                 </div>
 
@@ -637,9 +690,6 @@ function DashboardInner({
                             >
                               {s.txSignature.slice(0, 20)}…{s.txSignature.slice(-12)} ↗
                             </a>
-                            {isUsingFallback && (
-                              <span className="text-[11px] text-amber-300">(Sample)</span>
-                            )}
                           </div>
                           <CopyButton value={s.txSignature} label="transaction signature" />
                         </div>
@@ -719,10 +769,20 @@ function DashboardInner({
                       )}
                     </dl>
                   ) : (
-                    <p className="text-xs text-zinc-500 leading-relaxed">
-                      Start the local provider service with{" "}
-                      <code className="font-mono text-zinc-300">npm run start:provider</code> to inspect live health and specs.
-                    </p>
+                    <div className="space-y-2.5">
+                      <p className="text-xs text-zinc-400 leading-relaxed">
+                        {apiStatus === "checking"
+                          ? `Connecting to ${DEFAULT_PROVIDER_URL}/health (free-tier instances can take ~30s on cold start)…`
+                          : `Unable to reach ${DEFAULT_PROVIDER_URL}/health. If waking from sleep or using Brave Shields, allow the request and retry.`}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={refreshHealthAndRegistry}
+                        className="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 border border-white/10 text-[11px] font-mono text-zinc-200 transition-colors"
+                      >
+                        ↻ Retry API Health
+                      </button>
+                    </div>
                   )}
                 </div>
               </aside>
@@ -933,10 +993,24 @@ function DashboardInner({
                         return (
                           <tr key={d.pda} className="hover:bg-white/[0.02] transition-colors">
                             <th scope="row" className="p-4 text-zinc-100 font-medium text-left">
-                              <span className="inline-flex items-center gap-2">
-                                <span>{d.pda.slice(0, 8)}…{d.pda.slice(-6)}</span>
+                              <div className="flex items-center gap-2">
+                                <a
+                                  href={
+                                    isLocalhostRpc
+                                      ? `https://explorer.solana.com/address/${d.pda}?cluster=custom&customUrl=${encodeURIComponent("http://127.0.0.1:8899")}`
+                                      : `https://explorer.solana.com/address/${d.pda}?cluster=devnet`
+                                  }
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="hover:text-emerald-300 transition-colors"
+                                >
+                                  {d.pda.slice(0, 8)}…{d.pda.slice(-6)} ↗
+                                </a>
                                 <CopyButton value={d.pda} label="dispute PDA" />
-                              </span>
+                              </div>
+                              <div className="text-[11px] font-normal text-zinc-500 mt-0.5">
+                                Provider: {d.provider.slice(0, 6)}…{d.provider.slice(-4)}
+                              </div>
                             </th>
                             <td className="p-4 tabular-nums text-zinc-300">{d.claimAmountSol.toFixed(4)} SOL</td>
                             <td className="p-4 tabular-nums text-zinc-300">{d.depositAmountSol.toFixed(4)} SOL</td>

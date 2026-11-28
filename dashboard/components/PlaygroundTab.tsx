@@ -775,8 +775,48 @@ export default function PlaygroundTab({
     selectedProvider && hasChainState && selectedInsured && !selectedMissingMeta
   );
 
+  const flowStep = !connected
+    ? 1
+    : state.arbiterResult
+    ? 5
+    : state.disputeTxSig
+    ? 4
+    : receipt
+    ? 3
+    : 2;
+
   return (
     <section className="space-y-6">
+      {/* 4-Step End-to-End Progress Bar */}
+      <ol className="grid grid-cols-2 lg:grid-cols-4 gap-2 text-xs font-mono">
+        {[
+          { num: 1, title: "Connect Wallet" },
+          { num: 2, title: "Pay 0.01 SOL & Verify Receipt" },
+          { num: 3, title: "Raise On-Chain Dispute" },
+          { num: 4, title: "Arbiter Slashes Bond" },
+        ].map((step) => {
+          const done = flowStep > step.num;
+          const active = flowStep === step.num;
+          return (
+            <li
+              key={step.num}
+              className={`px-3 py-2 rounded-lg border flex items-center gap-2 ${
+                done
+                  ? "bg-emerald-950/30 border-emerald-500/30 text-emerald-300"
+                  : active
+                  ? "bg-zinc-800/80 border-emerald-500/40 text-white"
+                  : "bg-zinc-900/40 border-white/10 text-zinc-500"
+              }`}
+            >
+              <span className="shrink-0">
+                {done ? "✓" : `0${step.num}`}
+              </span>
+              <span className="truncate">{step.title}</span>
+            </li>
+          );
+        })}
+      </ol>
+
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -787,15 +827,40 @@ export default function PlaygroundTab({
               Select any Devnet provider below, approve the x402 SOL payment, inspect the 249-byte Ed25519 receipt, and challenge lies on-chain.
             </p>
           </div>
-          {!connected && (
-            <button
-              type="button"
-              onClick={() => setVisible(true)}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
-            >
-              Connect Wallet to Start
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {responseData && (
+              <button
+                type="button"
+                onClick={() =>
+                  update({
+                    paymentTxSig: null,
+                    responseData: null,
+                    receipt: null,
+                    receiptBase64: "",
+                    signatureBase64: "",
+                    needsProviderSig: false,
+                    specJson: "",
+                    verifyResult: null,
+                    disputeTxSig: null,
+                    disputePda: null,
+                    arbiterResult: null,
+                  })
+                }
+                className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-white/10 text-zinc-300 text-xs font-mono transition-colors"
+              >
+                ↺ Clear Trace
+              </button>
+            )}
+            {!connected && (
+              <button
+                type="button"
+                onClick={() => setVisible(true)}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
+              >
+                Connect Wallet to Start
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
