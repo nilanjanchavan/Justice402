@@ -1,34 +1,43 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
-import { DEVNET_PROVIDERS, ProviderConfig } from "../lib/providers-config";
+import { ProviderConfig } from "../lib/providers-config";
 import {
   decodePaymentRefTxSig,
   decodeReceiptBrowser,
   ReceiptDataBrowser,
+  sha256,
   toHex,
 } from "../lib/receipt-browser";
 import { verifyResponseAgainstSpec, SpecCheckResult } from "../lib/spec-verifier";
 import { buildOpenDisputeTransaction } from "../lib/dispute-client";
 import { saveDisputeEvidence, saveLiveRun } from "../lib/live-run";
-import { OnChainProvider } from "../lib/solana";
+import {
+  availableBondLamports,
+  availableBondSol,
+  isProviderInsured,
+  MIN_INSURED_BOND_SOL,
+} from "../lib/solana";
 import { useToast } from "./Toast";
 
 const DEFAULT_PROVIDER_URL =
   process.env.NEXT_PUBLIC_PROVIDER_API_URL || "http://127.0.0.1:3402";
 
 interface PlaygroundState {
-  selectedProvider: ProviderConfig | null;
+  selectedWallet: string | null;
+  simulateLie: boolean;
   loading: boolean;
+  coSigning: boolean;
   stageLabel: string;
   paymentTxSig: string | null;
   responseData: any | null;
   receipt: ReceiptDataBrowser | null;
   receiptBase64: string;
   signatureBase64: string;
+  needsProviderSig: boolean;
   specJson: string;
   verifyResult: SpecCheckResult | null;
   disputeLoading: boolean;
@@ -57,30 +66,35 @@ function CopyBtn({ value }: { value: string }) {
 }
 
 export default function PlaygroundTab({
+  providers,
   onRefresh,
   onRunUpdate,
-  onChainProviders,
+  onGoToProviders,
   isLocalhostRpc,
 }: {
+  providers: ProviderConfig[];
   onRefresh: () => void;
   onRunUpdate: (runData: any) => void;
-  onChainProviders: OnChainProvider[];
+  onGoToProviders: () => void;
   isLocalhostRpc: boolean;
 }) {
-  const { publicKey, connected, sendTransaction } = useWallet();
+  const { publicKey, connected, sendTransaction, signMessage } = useWallet();
   const { setVisible } = useWalletModal();
   const { connection } = useConnection();
   const { toast } = useToast();
 
   const [state, setState] = useState<PlaygroundState>({
-    selectedProvider: DEVNET_PROVIDERS[1], // Default highlight Lying provider for quick demo
+    selectedWallet: providers[1]?.wallet || providers[0]?.wallet || null,
+    simulateLie: false,
     loading: false,
+    coSigning: false,
     stageLabel: "",
     paymentTxSig: null,
     responseData: null,
     receipt: null,
     receiptBase64: "",
     signatureBase64: "",
+    needsProviderSig: false,
     specJson: "",
     verifyResult: null,
     disputeLoading: false,
@@ -90,8 +104,17 @@ export default function PlaygroundTab({
     arbiterResult: null,
   });
 
+  useEffect(() => {
+    if (!state.selectedWallet && providers.length > 0) {
+      setState((s) => ({ ...s, selectedWallet: providers[1]?.wallet || providers[0].wallet }));
+    }
+  }, [providers, state.selectedWallet]);
+
   const update = (patch: Partial<PlaygroundState>) =>
     setState((s) => ({ ...s, ...patch }));
+
+  const selectedProvider =
+    providers.find((p) => p.wallet === state.selectedWallet) || providers[0] || null;
 
   const explorerTx = useCallback(
     (sig: string) =>
@@ -113,20 +136,18 @@ export default function PlaygroundTab({
       arbiterResult?: any | null;
       priceLamports?: number;
     }) => {
-      const chainProvider = onChainProviders.find(
-        (cp) => cp.wallet === params.provider.wallet
-      );
+      const cp = params.provider.chainState;
       const steps: any[] = [
         {
           step: 1,
-          title: "Pre-Flight Trust Verification",
+          title: "Pre-Flight Bond & Coverage Verification",
           status: "SUCCESS",
           description:
-            "Inspected provider on-chain bond, track record, and immutable spec_hash on Solana.",
+            "Verified provider available bond (staked - locked) and immutable spec_hash on Solana Devnet.",
           details: {
             provider: params.provider.wallet,
-            bond: chainProvider ? `${chainProvider.bondSol.toFixed(4)} SOL` : "0.0500 SOL",
-            slashed: chainProvider ? `${chainProvider.totalSlashedSol.toFixed(4)} SOL` : "0.0000 SOL",
+            availableBond: cp ? `${availableBondSol(cp).toFixed(4)} SOL` : "Unknown",
+            slashed: cp ? `${cp.totalSlashedSol.toFixed(4)} SOL` : "0.0000 SOL",
           },
         },
         {
@@ -173,7 +194,8 @@ export default function PlaygroundTab({
           status: "SUCCESS",
           description: `Arbiter ran deterministic spec audit and signed ${params.arbiterResult.ruling} on Solana.`,
           txSignature: params.arbiterResult.txSignature,
-          explorerUrl: params.arbiterResult.explorerUrl || explorerTx(params.arbiterResult.txSignature),
+          explorerUrl:
+            params.arbiterResult.explorerUrl || explorerTx(params.arbiterResult.txSignature),
           details: {
             ruling: params.arbiterResult.ruling,
             disputePda: params.disputePda,
@@ -192,27 +214,105 @@ export default function PlaygroundTab({
       saveLiveRun(runObj);
       onRunUpdate(runObj);
     },
-    [onChainProviders, explorerTx, isLocalhostRpc, onRunUpdate]
+    [explorerTx, isLocalhostRpc, onRunUpdate]
   );
 
-  // Step 1 & 2: Execute real x402 paid request -> receive 249-byte receipt -> verify spec
+  // Fetch URL directly or fallback through /providers/proxy preserving upstream 402 envelopes
+  async function fetchX402Endpoint(url: string, paymentProofB64?: string) {
+    const headers: Record<string, string> = {};
+    if (paymentProofB64) headers["PAYMENT-SIGNATURE"] = paymentProofB64;
+
+    const isHostedSameBackend = url.startsWith(DEFAULT_PROVIDER_URL);
+    if (isHostedSameBackend) {
+      const res = await fetch(url, { headers });
+      const body = await res.json().catch(() => ({}));
+      return {
+        status: res.status,
+        paymentRequiredHeader: res.headers.get("PAYMENT-REQUIRED"),
+        receiptHeader: res.headers.get("X-Justice402-Receipt"),
+        signatureHeader: res.headers.get("X-Justice402-Signature"),
+        body,
+      };
+    }
+
+    try {
+      const res = await fetch(url, { headers });
+      const body = await res.json().catch(() => ({}));
+      return {
+        status: res.status,
+        paymentRequiredHeader: res.headers.get("PAYMENT-REQUIRED"),
+        receiptHeader: res.headers.get("X-Justice402-Receipt"),
+        signatureHeader: res.headers.get("X-Justice402-Signature"),
+        body,
+      };
+    } catch {
+      const proxyRes = await fetch(`${DEFAULT_PROVIDER_URL}/providers/proxy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetUrl: url, paymentSignature: paymentProofB64 }),
+      });
+      const proxyData = await proxyRes.json().catch(() => ({}));
+      if (!proxyRes.ok && !proxyData?.proxied) {
+        throw new Error(proxyData.error || `Proxy relay failed (${proxyRes.status})`);
+      }
+      return {
+        status: proxyData.status,
+        paymentRequiredHeader: proxyData.headers?.["payment-required"] || null,
+        receiptHeader: proxyData.headers?.["x-justice402-receipt"] || null,
+        signatureHeader: proxyData.headers?.["x-justice402-signature"] || null,
+        body: proxyData.body,
+      };
+    }
+  }
+
   const handleSendRequest = useCallback(
     async (provider: ProviderConfig) => {
+      if (state.coSigning) {
+        toast({ type: "info", text: "Finish or cancel receipt co-signing before sending a new call." });
+        return;
+      }
       if (!connected || !publicKey) {
         setVisible(true);
         toast({ type: "info", text: "Connect a Solana wallet first to execute a paid x402 call." });
         return;
       }
 
+      if (!provider.chainState) {
+        toast({
+          type: "error",
+          text: "On-chain provider bond coverage is unknown (RPC load pending or failed). Refresh on-chain state first.",
+        });
+        return;
+      }
+
+      if (!isProviderInsured(provider.chainState)) {
+        toast({
+          type: "error",
+          text: `${provider.name} is Under-Bonded (${availableBondSol(provider.chainState).toFixed(4)} SOL available < ${MIN_INSURED_BOND_SOL.toFixed(2)} SOL). Provider must Top Up Bond first.`,
+        });
+        return;
+      }
+
+      if (provider.badge === "community" && provider.hostedProxy && !provider.hasRegistryMetadata) {
+        toast({
+          type: "error",
+          text: "Community provider metadata/spec is not published in the public registry yet.",
+        });
+        return;
+      }
+
+      const committedSpecHashHex = provider.chainState.specHashHex;
+
       update({
-        selectedProvider: provider,
+        selectedWallet: provider.wallet,
         loading: true,
-        stageLabel: "Fetching service spec & querying x402 endpoint…",
+        stageLabel: "Verifying committed service spec & querying x402 endpoint…",
         paymentTxSig: null,
         responseData: null,
         receipt: null,
         receiptBase64: "",
         signatureBase64: "",
+        needsProviderSig: false,
         specJson: "",
         verifyResult: null,
         disputeTxSig: null,
@@ -221,23 +321,34 @@ export default function PlaygroundTab({
       });
 
       try {
-        const specRes = await fetch(`${DEFAULT_PROVIDER_URL}/spec`);
-        if (!specRes.ok) throw new Error(`Failed to fetch /spec (${specRes.status})`);
-        const specJson = await specRes.text();
+        let authoritativeSpecJson = provider.specJson || "";
+        if (!authoritativeSpecJson) {
+          const specRes = await fetch(`${DEFAULT_PROVIDER_URL}/spec`);
+          if (!specRes.ok) throw new Error(`Failed to fetch /spec (${specRes.status})`);
+          authoritativeSpecJson = await specRes.text();
+        }
 
-        const targetUrl = `${provider.endpoint}?buyer=${publicKey.toBase58()}`;
-        let res = await fetch(targetUrl);
+        const specDigest = toHex(await sha256(authoritativeSpecJson));
+        if (specDigest !== committedSpecHashHex) {
+          throw new Error(
+            `Committed spec mismatch: registry spec hashes to ${specDigest}, on-chain provider committed ${committedSpecHashHex}.`
+          );
+        }
+
+        const sep = provider.endpoint.includes("?") ? "&" : "?";
+        const simParam =
+          provider.badge === "community" && provider.hostedProxy && state.simulateLie
+            ? "&simulate=lie"
+            : "";
+        const targetUrl = `${provider.endpoint}${sep}buyer=${publicKey.toBase58()}${simParam}`;
+
+        let reply = await fetchX402Endpoint(targetUrl);
         let paymentTxSig: string | null = null;
 
-        // Handle standard x402 402 Payment Required challenge
-        if (res.status === 402) {
-          let challenge: any = null;
-          const reqHeader = res.headers.get("PAYMENT-REQUIRED");
-          if (reqHeader) {
-            challenge = JSON.parse(atob(reqHeader));
-          } else {
-            challenge = await res.json();
-          }
+        if (reply.status === 402) {
+          const challenge = reply.paymentRequiredHeader
+            ? JSON.parse(atob(reply.paymentRequiredHeader))
+            : reply.body;
 
           const accept = challenge?.accepts?.[0];
           if (!accept?.payTo || !accept?.amount) {
@@ -276,10 +387,13 @@ export default function PlaygroundTab({
             stageLabel: "Confirming x402 SOL payment on Solana Devnet…",
           });
 
-          await connection.confirmTransaction(
+          const payConf = await connection.confirmTransaction(
             { signature: paymentTxSig, blockhash, lastValidBlockHeight },
             "confirmed"
           );
+          if (payConf.value.err) {
+            throw new Error(`x402 payment failed on-chain: ${JSON.stringify(payConf.value.err)}`);
+          }
 
           toast({
             type: "info",
@@ -297,35 +411,46 @@ export default function PlaygroundTab({
             })
           );
 
-          res = await fetch(targetUrl, {
-            headers: {
-              "PAYMENT-SIGNATURE": paymentProofB64,
-            },
-          });
+          reply = await fetchX402Endpoint(targetUrl, paymentProofB64);
         }
 
-        if (!res.ok) {
-          const errBody = await res.json().catch(() => ({}));
-          throw new Error(errBody.error || `API returned HTTP ${res.status}`);
+        if (reply.status < 200 || reply.status >= 300) {
+          throw new Error(reply.body?.error || `API returned HTTP ${reply.status}`);
         }
 
-        const body = await res.json();
+        const body = reply.body || {};
         const data = body.data || body;
-        const receiptB64 =
-          body.receipt?.bytesBase64 || res.headers.get("X-Justice402-Receipt") || "";
-        const sigB64 =
-          body.receipt?.signatureBase64 || res.headers.get("X-Justice402-Signature") || "";
+        const receiptB64 = body.receipt?.bytesBase64 || reply.receiptHeader || "";
+        const sigB64 = body.receipt?.signatureBase64 || reply.signatureHeader || "";
+        const needsProviderSig = Boolean(body.receipt?.needsProviderSignature && !sigB64);
         const effectivePaySig = paymentTxSig || body.payment?.txSignature || null;
 
-        if (!receiptB64 || !sigB64) {
-          throw new Error("Provider response missing signed 249-byte receipt headers");
+        if (!receiptB64) {
+          throw new Error("Provider response missing 249-byte canonical receipt");
         }
 
         const receipt = decodeReceiptBrowser(receiptB64);
 
+        // Bind both receipt.specHash and any returned body.specJson strictly to on-chain specHashHex
+        const receiptSpecHex = toHex(receipt.specHash);
+        if (receiptSpecHex !== committedSpecHashHex) {
+          throw new Error(
+            `Receipt specHash (${receiptSpecHex}) does not match provider's on-chain specHash (${committedSpecHashHex}).`
+          );
+        }
+
+        if (body.specJson) {
+          const returnedSpecHex = toHex(await sha256(String(body.specJson)));
+          if (returnedSpecHex !== committedSpecHashHex) {
+            throw new Error(
+              `Returned response specJson (${returnedSpecHex}) does not match provider's on-chain specHash (${committedSpecHashHex}).`
+            );
+          }
+        }
+
         const rawBytes = new TextEncoder().encode(JSON.stringify(data));
         const verifyResult = await verifyResponseAgainstSpec({
-          specJson,
+          specJson: authoritativeSpecJson,
           expectedSpecHash: receipt.specHash,
           responseData: data,
           rawResponseBytes: rawBytes,
@@ -341,7 +466,8 @@ export default function PlaygroundTab({
           receipt,
           receiptBase64: receiptB64,
           signatureBase64: sigB64,
-          specJson,
+          needsProviderSig,
+          specJson: authoritativeSpecJson,
           verifyResult,
         });
 
@@ -354,17 +480,12 @@ export default function PlaygroundTab({
           priceLamports: Number(receipt.price),
         });
 
-        if (verifyResult.isValid) {
-          toast({
-            type: "success",
-            text: `${provider.name}: Paid & verified PASS`,
-          });
-        } else {
-          toast({
-            type: "warning",
-            text: `${provider.name}: Paid & caught ${verifyResult.errors.length} spec violation(s)!`,
-          });
-        }
+        toast({
+          type: verifyResult.isValid ? "success" : "warning",
+          text: verifyResult.isValid
+            ? `${provider.name}: Paid & verified PASS`
+            : `${provider.name}: Paid & caught ${verifyResult.errors.length} spec violation(s)!`,
+        });
       } catch (err: any) {
         update({ loading: false, stageLabel: "" });
         const msg = err?.message || "Request failed";
@@ -375,24 +496,76 @@ export default function PlaygroundTab({
         }
       }
     },
-    [connected, publicKey, setVisible, connection, sendTransaction, explorerTx, pushTimelineRun, toast]
+    [
+      state.coSigning,
+      state.simulateLie,
+      connected,
+      publicKey,
+      setVisible,
+      connection,
+      sendTransaction,
+      explorerTx,
+      pushTimelineRun,
+      toast,
+    ]
   );
 
-  // Step 3: Raise on-chain dispute directly from buyer wallet
+  // Co-sign 249-byte canonical receipt safely; discard if receipt changed during wallet prompt
+  const handleCoSignTestReceipt = useCallback(async () => {
+    if (!publicKey || !state.receiptBase64 || !signMessage) {
+      toast({ type: "error", text: "Connected wallet does not support off-chain message signing." });
+      return;
+    }
+    const signingReceiptB64 = state.receiptBase64;
+    update({ coSigning: true });
+    try {
+      const raw = Uint8Array.from(atob(signingReceiptB64), (c) => c.charCodeAt(0));
+      const sig = await signMessage(raw);
+      const sigB64 = btoa(String.fromCharCode(...Array.from(sig)));
+
+      let applied = false;
+      setState((s) => {
+        if (s.receiptBase64 !== signingReceiptB64) {
+          return { ...s, coSigning: false };
+        }
+        applied = true;
+        return { ...s, signatureBase64: sigB64, needsProviderSig: false, coSigning: false };
+      });
+
+      if (applied) {
+        toast({ type: "success", text: "Provider wallet Ed25519 signature attached!" });
+      } else {
+        toast({ type: "warning", text: "Receipt changed during signing; signature discarded." });
+      }
+    } catch (err: any) {
+      update({ coSigning: false });
+      toast({ type: "warning", text: err?.message || "Signature cancelled" });
+    }
+  }, [publicKey, state.receiptBase64, signMessage, toast]);
+
+  // Open dispute using receipt's provider coverage and fresh blockhash after wSOL wrap
   const handleOpenDispute = useCallback(async () => {
-    if (!connected || !publicKey || !state.receipt || !state.responseData || !state.selectedProvider) {
+    if (!connected || !publicKey || !state.receipt || !state.responseData) {
       toast({ type: "error", text: "Connect wallet and execute an x402 API call first" });
       return;
     }
-
-    const providerOnChain = onChainProviders.find(
-      (p) => p.wallet === state.receipt!.provider.toBase58()
-    );
-    const claimSol = Number(state.receipt.price) / 1e9;
-    if (providerOnChain && providerOnChain.bondSol - providerOnChain.lockedSol < claimSol) {
+    if (!state.signatureBase64) {
       toast({
         type: "error",
-        text: `Provider bond too low (${(providerOnChain.bondSol - providerOnChain.lockedSol).toFixed(4)} SOL available < ${claimSol.toFixed(4)} SOL claim). Try Plausible-Wrong or Honest provider!`,
+        text: "Receipt has no Ed25519 signature yet. If testing your Hosted Test provider, click Co-Sign Receipt first.",
+      });
+      return;
+    }
+
+    const targetProviderWallet = state.receipt.provider.toBase58();
+    const receiptProvider = providers.find((p) => p.wallet === targetProviderWallet);
+    const targetChainState = receiptProvider?.chainState;
+    const claimLamports = state.receipt.price;
+
+    if (targetChainState && availableBondLamports(targetChainState) < claimLamports) {
+      toast({
+        type: "error",
+        text: `Provider (${targetProviderWallet.slice(0, 6)}…) bond too low (${availableBondSol(targetChainState).toFixed(4)} SOL available < ${(Number(claimLamports) / 1e9).toFixed(4)} SOL claim). Top up bond first.`,
       });
       return;
     }
@@ -400,16 +573,48 @@ export default function PlaygroundTab({
     update({ disputeLoading: true });
 
     try {
-      const { transaction, disputePda } = await buildOpenDisputeTransaction({
-        connection,
-        buyerPubkey: publicKey,
-        receipt: state.receipt,
-        signatureBase64: state.signatureBase64,
-        responseData: state.responseData,
+      const { prepareTransaction, transaction, disputePda } =
+        await buildOpenDisputeTransaction({
+          connection,
+          buyerPubkey: publicKey,
+          receipt: state.receipt,
+          signatureBase64: state.signatureBase64,
+          responseData: state.responseData,
+        });
+
+      if (prepareTransaction) {
+        toast({
+          type: "info",
+          text: "Step 1/2: Wrapping 0.01 SOL dispute deposit into wSOL…",
+        });
+        const prepSig = await sendTransaction(prepareTransaction, connection);
+        const prepConf = await connection.confirmTransaction(
+          {
+            signature: prepSig,
+            blockhash: prepareTransaction.recentBlockhash!,
+            lastValidBlockHeight: prepareTransaction.lastValidBlockHeight!,
+          },
+          "confirmed"
+        );
+        if (prepConf.value.err) {
+          throw new Error(`wSOL wrap failed: ${JSON.stringify(prepConf.value.err)}`);
+        }
+
+        // Refresh blockhash immediately before sending the second transaction
+        const freshBh = await connection.getLatestBlockhash("confirmed");
+        transaction.recentBlockhash = freshBh.blockhash;
+        transaction.lastValidBlockHeight = freshBh.lastValidBlockHeight;
+      }
+
+      toast({
+        type: "info",
+        text: prepareTransaction
+          ? "Step 2/2: Submitting Ed25519 + open_dispute transaction…"
+          : "Submitting Ed25519 + open_dispute transaction…",
       });
 
       const txSig = await sendTransaction(transaction, connection);
-      await connection.confirmTransaction(
+      const openConf = await connection.confirmTransaction(
         {
           signature: txSig,
           blockhash: transaction.recentBlockhash!,
@@ -417,6 +622,9 @@ export default function PlaygroundTab({
         },
         "confirmed"
       );
+      if (openConf.value.err) {
+        throw new Error(`open_dispute failed on-chain: ${JSON.stringify(openConf.value.err)}`);
+      }
 
       const disputePdaStr = disputePda.toBase58();
       saveDisputeEvidence({
@@ -426,8 +634,19 @@ export default function PlaygroundTab({
         signatureBase64: state.signatureBase64,
         openTxSig: txSig,
         paymentTxSig: state.paymentTxSig || undefined,
-        providerWallet: state.receipt.provider.toBase58(),
+        providerWallet: targetProviderWallet,
       });
+
+      fetch(`${DEFAULT_PROVIDER_URL}/arbiter/evidence`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          disputePda: disputePdaStr,
+          responsePayload: state.responseData,
+          receiptBase64: state.receiptBase64,
+          specJson: state.specJson || undefined,
+        }),
+      }).catch(() => {});
 
       update({
         disputeLoading: false,
@@ -435,16 +654,18 @@ export default function PlaygroundTab({
         disputePda: disputePdaStr,
       });
 
-      pushTimelineRun({
-        provider: state.selectedProvider,
-        buyer: publicKey.toBase58(),
-        paymentTxSig: state.paymentTxSig,
-        data: state.responseData,
-        verifyResult: state.verifyResult,
-        disputePda: disputePdaStr,
-        disputeTxSig: txSig,
-        priceLamports: Number(state.receipt.price),
-      });
+      if (receiptProvider || selectedProvider) {
+        pushTimelineRun({
+          provider: receiptProvider || selectedProvider!,
+          buyer: publicKey.toBase58(),
+          paymentTxSig: state.paymentTxSig,
+          data: state.responseData,
+          verifyResult: state.verifyResult,
+          disputePda: disputePdaStr,
+          disputeTxSig: txSig,
+          priceLamports: Number(state.receipt.price),
+        });
+      }
 
       toast({
         type: "success",
@@ -462,11 +683,26 @@ export default function PlaygroundTab({
         toast({ type: "error", text: `Open dispute failed: ${msg}` });
       }
     }
-  }, [connected, publicKey, state, onChainProviders, connection, sendTransaction, explorerTx, pushTimelineRun, toast, onRefresh]);
+  }, [
+    connected,
+    publicKey,
+    state,
+    providers,
+    selectedProvider,
+    connection,
+    sendTransaction,
+    explorerTx,
+    pushTimelineRun,
+    toast,
+    onRefresh,
+  ]);
 
-  // Step 4: Request Arbiter Ruling from Render backend
   const handleRequestArbiter = useCallback(async () => {
-    if (!state.disputePda || !publicKey || !state.selectedProvider) return;
+    if (!state.disputePda || !publicKey) return;
+    const targetProvider =
+      (state.receipt &&
+        providers.find((p) => p.wallet === state.receipt!.provider.toBase58())) ||
+      selectedProvider;
 
     update({ arbiterLoading: true });
 
@@ -478,6 +714,7 @@ export default function PlaygroundTab({
           disputePda: state.disputePda,
           responsePayload: state.responseData,
           receiptBase64: state.receiptBase64,
+          specJson: state.specJson || undefined,
         }),
       });
 
@@ -488,17 +725,19 @@ export default function PlaygroundTab({
 
       update({ arbiterLoading: false, arbiterResult: data });
 
-      pushTimelineRun({
-        provider: state.selectedProvider,
-        buyer: publicKey.toBase58(),
-        paymentTxSig: state.paymentTxSig,
-        data: state.responseData,
-        verifyResult: state.verifyResult,
-        disputePda: state.disputePda,
-        disputeTxSig: state.disputeTxSig,
-        arbiterResult: data,
-        priceLamports: state.receipt ? Number(state.receipt.price) : 10_000_000,
-      });
+      if (targetProvider) {
+        pushTimelineRun({
+          provider: targetProvider,
+          buyer: publicKey.toBase58(),
+          paymentTxSig: state.paymentTxSig,
+          data: state.responseData,
+          verifyResult: state.verifyResult,
+          disputePda: state.disputePda,
+          disputeTxSig: state.disputeTxSig,
+          arbiterResult: data,
+          priceLamports: state.receipt ? Number(state.receipt.price) : 10_000_000,
+        });
+      }
 
       toast({
         type: data.ruling === "BuyerWins" ? "success" : "info",
@@ -514,14 +753,70 @@ export default function PlaygroundTab({
       update({ arbiterLoading: false });
       toast({ type: "error", text: `Arbiter error: ${err?.message || err}` });
     }
-  }, [state, publicKey, pushTimelineRun, toast, onRefresh]);
+  }, [state, publicKey, providers, selectedProvider, pushTimelineRun, toast, onRefresh]);
 
-  const { selectedProvider, receipt, verifyResult, responseData } = state;
+  const { receipt, verifyResult, responseData } = state;
   const decodedPayRefSig = receipt ? decodePaymentRefTxSig(receipt.paymentReference) : null;
+
+  const hasChainState = Boolean(selectedProvider?.chainState);
+  const selectedInsured = Boolean(
+    selectedProvider?.chainState && isProviderInsured(selectedProvider.chainState)
+  );
+  const selectedMissingMeta = Boolean(
+    selectedProvider &&
+      selectedProvider.badge === "community" &&
+      selectedProvider.hostedProxy &&
+      !selectedProvider.hasRegistryMetadata
+  );
+  const selectedAvailSol = selectedProvider?.chainState
+    ? availableBondSol(selectedProvider.chainState)
+    : 0;
+  const canPaySelected = Boolean(
+    selectedProvider && hasChainState && selectedInsured && !selectedMissingMeta
+  );
+
+  const flowStep = !connected
+    ? 1
+    : state.arbiterResult
+    ? 5
+    : state.disputeTxSig
+    ? 4
+    : receipt
+    ? 3
+    : 2;
 
   return (
     <section className="space-y-6">
-      {/* Provider Cards + Pay Button */}
+      {/* 4-Step End-to-End Progress Bar */}
+      <ol className="grid grid-cols-2 lg:grid-cols-4 gap-2 text-xs font-mono">
+        {[
+          { num: 1, title: "Connect Wallet" },
+          { num: 2, title: "Pay 0.01 SOL & Verify Receipt" },
+          { num: 3, title: "Raise On-Chain Dispute" },
+          { num: 4, title: "Arbiter Slashes Bond" },
+        ].map((step) => {
+          const done = flowStep > step.num;
+          const active = flowStep === step.num;
+          return (
+            <li
+              key={step.num}
+              className={`px-3 py-2 rounded-lg border flex items-center gap-2 ${
+                done
+                  ? "bg-emerald-950/30 border-emerald-500/30 text-emerald-300"
+                  : active
+                  ? "bg-zinc-800/80 border-emerald-500/40 text-white"
+                  : "bg-zinc-900/40 border-white/10 text-zinc-500"
+              }`}
+            >
+              <span className="shrink-0">
+                {done ? "✓" : `0${step.num}`}
+              </span>
+              <span className="truncate">{step.title}</span>
+            </li>
+          );
+        })}
+      </ol>
+
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -529,40 +824,68 @@ export default function PlaygroundTab({
               Live x402 Paid API Playground (0.01 SOL / call)
             </h2>
             <p className="text-xs text-zinc-400 mt-0.5">
-              Select a registered Devnet provider, approve the x402 SOL payment, inspect the 249-byte Ed25519 receipt, and challenge lies on-chain.
+              Select any Devnet provider below, approve the x402 SOL payment, inspect the 249-byte Ed25519 receipt, and challenge lies on-chain.
             </p>
           </div>
-          {!connected && (
-            <button
-              type="button"
-              onClick={() => setVisible(true)}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
-            >
-              Connect Wallet to Start
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {responseData && (
+              <button
+                type="button"
+                onClick={() =>
+                  update({
+                    paymentTxSig: null,
+                    responseData: null,
+                    receipt: null,
+                    receiptBase64: "",
+                    signatureBase64: "",
+                    needsProviderSig: false,
+                    specJson: "",
+                    verifyResult: null,
+                    disputeTxSig: null,
+                    disputePda: null,
+                    arbiterResult: null,
+                  })
+                }
+                className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-white/10 text-zinc-300 text-xs font-mono transition-colors"
+              >
+                ↺ Clear Trace
+              </button>
+            )}
+            {!connected && (
+              <button
+                type="button"
+                onClick={() => setVisible(true)}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
+              >
+                Connect Wallet to Start
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {DEVNET_PROVIDERS.map((p) => {
+          {providers.map((p) => {
             const badgeColors = {
               honest: "text-emerald-300 border-emerald-500/30 bg-emerald-500/10",
               lying: "text-rose-300 border-rose-500/30 bg-rose-500/10",
               subtle: "text-amber-300 border-amber-500/30 bg-amber-500/10",
+              community: "text-sky-300 border-sky-500/30 bg-sky-500/10",
             };
-            const isSelected = selectedProvider?.endpoint === p.endpoint;
-            const liveStats = onChainProviders.find((cp) => cp.wallet === p.wallet);
+            const isSelected = selectedProvider?.wallet === p.wallet;
+            const liveStats = p.chainState;
+            const insured = liveStats ? isProviderInsured(liveStats) : false;
+            const avail = liveStats ? availableBondSol(liveStats) : 0;
 
             return (
               <div
-                key={p.endpoint}
-                onClick={() => !state.loading && update({ selectedProvider: p })}
+                key={p.wallet}
+                onClick={() => !state.loading && update({ selectedWallet: p.wallet })}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    if (!state.loading) update({ selectedProvider: p });
+                    if (!state.loading) update({ selectedWallet: p.wallet });
                   }
                 }}
                 className={`text-left p-4 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-3 ${
@@ -572,10 +895,12 @@ export default function PlaygroundTab({
                 }`}
               >
                 <div>
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="font-display text-sm font-medium text-white">{p.name}</span>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className="font-display text-sm font-medium text-white truncate">
+                      {p.name}
+                    </span>
                     <span
-                      className={`text-[10px] font-mono px-1.5 py-0.5 border rounded uppercase ${badgeColors[p.badge]}`}
+                      className={`text-[10px] font-mono px-1.5 py-0.5 border rounded uppercase shrink-0 ${badgeColors[p.badge]}`}
                     >
                       {p.badge}
                     </span>
@@ -583,19 +908,26 @@ export default function PlaygroundTab({
                   <p className="text-xs text-zinc-400 leading-relaxed">{p.description}</p>
                 </div>
 
-                <div className="pt-2 border-t border-white/[0.06] flex items-center justify-between text-[11px] font-mono">
-                  <span className="text-zinc-500 truncate max-w-[140px]" title={p.wallet}>
-                    {p.wallet.slice(0, 6)}…{p.wallet.slice(-4)}
-                  </span>
-                  {liveStats ? (
-                    <span className="text-zinc-300 tabular-nums">
-                      Bond: {liveStats.bondSol.toFixed(3)} SOL
-                      {liveStats.disputesBuyerWon > 0 && (
-                        <span className="text-rose-300 ml-1.5">({liveStats.disputesBuyerWon}x slashed)</span>
-                      )}
+                <div className="pt-2 border-t border-white/[0.06] space-y-1.5 text-[11px] font-mono">
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-500">
+                      {p.wallet.slice(0, 6)}…{p.wallet.slice(-4)}
                     </span>
-                  ) : (
-                    <span className="text-zinc-500">Devnet</span>
+                    {liveStats ? (
+                      <span className={insured ? "text-emerald-300" : "text-amber-300"}>
+                        {insured ? "✓ Active / Insured" : "⚠ Under-Bonded"}
+                      </span>
+                    ) : (
+                      <span className="text-zinc-500">Coverage Unknown</span>
+                    )}
+                  </div>
+                  {liveStats && (
+                    <div className="flex items-center justify-between text-zinc-400 tabular-nums">
+                      <span>Avail: {avail.toFixed(4)} SOL</span>
+                      <span>
+                        Slashed: {liveStats.disputesBuyerWon} ({liveStats.totalSlashedSol.toFixed(3)} SOL)
+                      </span>
+                    </div>
                   )}
                 </div>
               </div>
@@ -604,20 +936,71 @@ export default function PlaygroundTab({
         </div>
 
         {selectedProvider && (
-          <div className="flex flex-wrap items-center gap-3 pt-1">
-            <button
-              type="button"
-              onClick={() => handleSendRequest(selectedProvider)}
-              disabled={state.loading}
-              className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-medium transition-colors disabled:opacity-50"
-            >
-              {state.loading
-                ? state.stageLabel || "Processing x402 request…"
-                : `⚡ Pay 0.01 SOL & Call ${selectedProvider.name}`}
-            </button>
-            <span className="text-xs font-mono text-zinc-500 truncate">
-              {selectedProvider.endpoint}
-            </span>
+          <div className="space-y-3 pt-1">
+            {!hasChainState && (
+              <div className="bg-amber-950/40 border border-amber-500/40 rounded-lg p-3.5 text-xs font-mono text-amber-200 flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  ⚠ <strong>Coverage Unknown</strong>: On-chain provider bond data has not loaded yet. Refresh RPC state before executing paid calls.
+                </span>
+                <button
+                  type="button"
+                  onClick={onRefresh}
+                  className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-100 shrink-0"
+                >
+                  ↻ Retry RPC Load
+                </button>
+              </div>
+            )}
+
+            {hasChainState && !selectedInsured && (
+              <div className="bg-amber-950/40 border border-amber-500/40 rounded-lg p-3.5 text-xs font-mono text-amber-200 flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  ⚠ <strong>Under-Bonded Provider</strong>: Available bond ({selectedAvailSol.toFixed(4)} SOL) is below the {MIN_INSURED_BOND_SOL.toFixed(2)} SOL insurance minimum. Paid calls are blocked until topped up.
+                </span>
+                <button
+                  type="button"
+                  onClick={onGoToProviders}
+                  className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-100 shrink-0"
+                >
+                  Top Up Bond →
+                </button>
+              </div>
+            )}
+
+            {selectedMissingMeta && (
+              <div className="bg-amber-950/40 border border-amber-500/40 rounded-lg p-3.5 text-xs font-mono text-amber-200">
+                ⚠ Hosted calls are disabled until this provider&apos;s metadata and spec are published in the public registry.
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => handleSendRequest(selectedProvider)}
+                disabled={state.loading || state.coSigning || !canPaySelected}
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-medium transition-colors disabled:opacity-50"
+              >
+                {state.loading
+                  ? state.stageLabel || "Processing x402 request…"
+                  : `⚡ Pay 0.01 SOL & Call ${selectedProvider.name}`}
+              </button>
+
+              {selectedProvider.badge === "community" && selectedProvider.hostedProxy && (
+                <label className="inline-flex items-center gap-2 text-xs font-mono text-zinc-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={state.simulateLie}
+                    onChange={(e) => update({ simulateLie: e.target.checked })}
+                    className="rounded border-white/20 bg-zinc-900"
+                  />
+                  <span>Simulate Spec Violation (`temperature=9999`)</span>
+                </label>
+              )}
+
+              <span className="text-xs font-mono text-zinc-500 truncate">
+                {selectedProvider.endpoint}
+              </span>
+            </div>
           </div>
         )}
       </div>
@@ -625,7 +1008,6 @@ export default function PlaygroundTab({
       {/* Results Area */}
       {responseData && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Left: HTTP Payload + Verification + Dispute & Arbiter */}
           <div className="space-y-4">
             <div className="bg-zinc-900/50 border border-white/10 rounded-xl p-5 space-y-3">
               <div className="flex items-center justify-between gap-2">
@@ -717,11 +1099,29 @@ export default function PlaygroundTab({
                   </span>
                 </div>
 
+                {state.needsProviderSig && (
+                  <div className="bg-zinc-950/70 border border-amber-500/30 rounded-lg p-3 space-y-2 text-xs font-mono">
+                    <p className="text-amber-200">
+                      Hosted Test Route cannot forge your wallet&apos;s private key. If you own this provider wallet, co-sign the 249-byte receipt with Phantom/Solflare to enable on-chain Ed25519 disputes:
+                    </p>
+                    {publicKey && publicKey.equals(receipt.provider) && (
+                      <button
+                        type="button"
+                        onClick={handleCoSignTestReceipt}
+                        disabled={state.coSigning}
+                        className="px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs disabled:opacity-50"
+                      >
+                        {state.coSigning ? "Signing…" : "✍ Co-Sign 249-Byte Receipt with Wallet"}
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {!state.disputeTxSig ? (
                   <button
                     type="button"
                     onClick={handleOpenDispute}
-                    disabled={state.disputeLoading || !connected}
+                    disabled={state.disputeLoading || !connected || !state.signatureBase64}
                     className={`w-full px-4 py-2.5 rounded-lg text-xs font-mono font-medium transition-colors ${
                       !verifyResult.isValid
                         ? "bg-rose-600 hover:bg-rose-500 text-white"
@@ -729,7 +1129,7 @@ export default function PlaygroundTab({
                     } disabled:opacity-50`}
                   >
                     {state.disputeLoading
-                      ? "Submitting Ed25519 + open_dispute on Solana…"
+                      ? "Submitting on Solana Devnet…"
                       : !verifyResult.isValid
                       ? "🚨 Raise On-Chain Dispute (open_dispute)"
                       : "Raise On-Chain Dispute (Challenge Plausible Response)"}
@@ -793,7 +1193,10 @@ export default function PlaygroundTab({
                           <div className="text-xs font-mono flex items-center justify-between gap-2">
                             <span className="text-zinc-500">Resolution Tx</span>
                             <a
-                              href={state.arbiterResult.explorerUrl || explorerTx(state.arbiterResult.txSignature)}
+                              href={
+                                state.arbiterResult.explorerUrl ||
+                                explorerTx(state.arbiterResult.txSignature)
+                              }
                               target="_blank"
                               rel="noreferrer"
                               className="text-emerald-300 hover:underline truncate"
@@ -821,7 +1224,6 @@ export default function PlaygroundTab({
             )}
           </div>
 
-          {/* Right: 249-Byte Ed25519 Receipt Inspector */}
           <div className="space-y-4">
             {receipt && (
               <div className="bg-zinc-900/50 border border-white/10 rounded-xl p-5 space-y-3">
@@ -893,9 +1295,11 @@ export default function PlaygroundTab({
                     <dt className="text-zinc-500 shrink-0">Ed25519 Signature</dt>
                     <dd className="text-zinc-300 text-right flex items-center gap-1 min-w-0">
                       <span className="truncate max-w-[220px]">
-                        {state.signatureBase64.slice(0, 18)}…{state.signatureBase64.slice(-10)}
+                        {state.signatureBase64
+                          ? `${state.signatureBase64.slice(0, 18)}…${state.signatureBase64.slice(-10)}`
+                          : "Unsigned (awaiting co-sign)"}
                       </span>
-                      <CopyBtn value={state.signatureBase64} />
+                      {state.signatureBase64 && <CopyBtn value={state.signatureBase64} />}
                     </dd>
                   </div>
                 </dl>
@@ -909,10 +1313,12 @@ export default function PlaygroundTab({
                       <span className="text-zinc-500 block mb-0.5">X-Justice402-Receipt:</span>
                       {state.receiptBase64}
                     </div>
-                    <div className="p-2 bg-zinc-950/60 rounded text-[10px] font-mono text-zinc-400 break-all">
-                      <span className="text-zinc-500 block mb-0.5">X-Justice402-Signature:</span>
-                      {state.signatureBase64}
-                    </div>
+                    {state.signatureBase64 && (
+                      <div className="p-2 bg-zinc-950/60 rounded text-[10px] font-mono text-zinc-400 break-all">
+                        <span className="text-zinc-500 block mb-0.5">X-Justice402-Signature:</span>
+                        {state.signatureBase64}
+                      </div>
+                    )}
                   </div>
                 </details>
               </div>

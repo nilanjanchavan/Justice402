@@ -2,7 +2,6 @@ import express, { Request, Response } from "express";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import crypto from "crypto";
 import BN from "bn.js";
-import bs58 from "bs58";
 import {
   encodeReceipt,
   hashReceipt,
@@ -11,6 +10,10 @@ import {
 } from "@justice402/anchor-client";
 import { SPEC_HASH, SPEC_CANONICAL_JSON } from "./spec";
 import { createArbiterRouter, CachedReceiptEntry } from "./arbiter-router";
+import { createRegistryRouter, ProviderMetadataEntry } from "./registry-router";
+import { verifyOrChallengeX402 } from "./x402";
+
+const U64_MAX = 18446744073709551615n;
 
 export function signWithKeypair(message: Buffer, keypair: Keypair): Buffer {
   const privKey = crypto.createPrivateKey({
@@ -29,7 +32,7 @@ export interface ProviderAppOptions {
   lyingProviderKeypair?: Keypair;
   subtleProviderKeypair?: Keypair;
   specHash?: Buffer;
-  priceLamports?: number | BN;
+  priceLamports?: number | bigint | string | BN;
   allowedOrigin?: string;
   maxRequestsPerMinute?: number;
   nowFn?: () => number;
@@ -40,6 +43,7 @@ export interface ProviderAppOptions {
 
 export function createProviderApp(options: ProviderAppOptions): express.Application {
   const app = express();
+  app.set("trust proxy", 1);
   app.use(express.json());
 
   const {
@@ -47,19 +51,38 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     lyingProviderKeypair = providerKeypair,
     subtleProviderKeypair = providerKeypair,
     specHash = SPEC_HASH,
-    priceLamports = 5_000_000,
+    priceLamports = "5000000",
     allowedOrigin = process.env.DASHBOARD_ORIGIN || process.env.ALLOWED_ORIGINS || "*",
     maxRequestsPerMinute = 120,
     requirePayment = false,
     rpcUrl = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com",
   } = options;
 
+  // Validate exact integer decimal u64 string for priceLamports before mounting routes
+  const priceLamportsStr =
+    typeof priceLamports === "number"
+      ? Number.isSafeInteger(priceLamports)
+        ? String(priceLamports)
+        : (() => {
+            throw new Error("Unsafe number passed as priceLamports; use string, bigint, or BN");
+          })()
+      : priceLamports.toString();
+
+  if (!/^\d+$/.test(priceLamportsStr)) {
+    throw new Error(`Invalid priceLamports: ${priceLamportsStr}`);
+  }
+  const priceBig = BigInt(priceLamportsStr);
+  if (priceBig <= 0n || priceBig > U64_MAX) {
+    throw new Error(`priceLamports out of u64 bounds (> 0): ${priceLamportsStr}`);
+  }
+
   const currentUnixTime = () =>
     options.nowFn ? options.nowFn() : Math.floor(Date.now() / 1000);
 
   let nonceCounter = Math.floor(Date.now() / 1000);
-  const usedSignatures = new Set<string>();
+  const usedSignatures = new Map<string, number>();
   const receiptCache = new Map<string, CachedReceiptEntry>();
+  const providerRegistry = new Map<string, ProviderMetadataEntry>();
   const rpcConnection = requirePayment ? new Connection(rpcUrl, "confirmed") : null;
 
   // 1. CORS Configuration
@@ -71,7 +94,7 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Buyer-Wallet, X-Justice402-Receipt, X-Justice402-Signature, PAYMENT-SIGNATURE"
+      "Content-Type, Authorization, X-Buyer-Wallet, X-Justice402-Receipt, X-Justice402-Signature, PAYMENT-SIGNATURE, X-Arbiter-Token, X-Arbiter-Wallet"
     );
     res.setHeader(
       "Access-Control-Expose-Headers",
@@ -130,20 +153,18 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
         subtle: subtleProviderKeypair.publicKey.toBase58(),
       },
       specHash: specHash.toString("hex"),
-      priceLamports: Number(priceLamports.toString()),
+      priceLamports: priceLamportsStr,
       requirePayment,
       network: "devnet",
       timestamp: currentUnixTime(),
     });
   });
 
-  // Off-chain service spec endpoint: /spec
   app.get("/spec", (_req: Request, res: Response) => {
     res.setHeader("Content-Type", "application/json");
     res.send(SPEC_CANONICAL_JSON);
   });
 
-  // Reference ground-truth endpoint: /reference/weather
   app.get("/reference/weather", (req: Request, res: Response) => {
     const city = (req.query.city as string) || "SolanaBeach";
     res.json({
@@ -153,131 +174,6 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
       observedAt: currentUnixTime(),
     });
   });
-
-  // Verify x402 payment header or emit 402 Payment Required
-  async function verifyOrChallengeX402(
-    req: Request,
-    res: Response,
-    payToKeypair: Keypair
-  ): Promise<{ ok: boolean; paymentRef: Buffer; paymentTxSig?: string }> {
-    const enforce =
-      requirePayment ||
-      req.query.x402 === "1" ||
-      req.headers["x-justice402-require-payment"] === "1";
-
-    if (!enforce) {
-      return { ok: true, paymentRef: Buffer.alloc(64, 0) };
-    }
-
-    const paymentHeader = req.headers["payment-signature"] as string | undefined;
-    const priceStr = priceLamports.toString();
-
-    if (!paymentHeader) {
-      const paymentRequired = {
-        x402Version: 2,
-        error: "Payment Required",
-        accepts: [
-          {
-            scheme: "exact",
-            network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
-            asset: "SOL",
-            amount: priceStr,
-            payTo: payToKeypair.publicKey.toBase58(),
-            maxTimeoutSeconds: 60,
-          },
-        ],
-      };
-      res.setHeader(
-        "PAYMENT-REQUIRED",
-        Buffer.from(JSON.stringify(paymentRequired)).toString("base64")
-      );
-      res.status(402).json(paymentRequired);
-      return { ok: false, paymentRef: Buffer.alloc(64, 0) };
-    }
-
-    let txSignature = "";
-    try {
-      const trimmed = paymentHeader.trim();
-      if (/^[1-9A-HJ-NP-Za-km-z]{64,96}$/.test(trimmed)) {
-        txSignature = trimmed;
-      } else {
-        const parsed = JSON.parse(Buffer.from(trimmed, "base64").toString("utf8"));
-        txSignature = parsed.txSignature || parsed.signature || parsed.transaction || "";
-      }
-    } catch {
-      res.status(402).json({ error: "Invalid PAYMENT-SIGNATURE header format" });
-      return { ok: false, paymentRef: Buffer.alloc(64, 0) };
-    }
-
-    if (!txSignature) {
-      res.status(402).json({ error: "Missing txSignature in PAYMENT-SIGNATURE" });
-      return { ok: false, paymentRef: Buffer.alloc(64, 0) };
-    }
-
-    if (usedSignatures.has(txSignature)) {
-      res.status(402).json({ error: "Payment signature already redeemed" });
-      return { ok: false, paymentRef: Buffer.alloc(64, 0) };
-    }
-
-    let sigBytes: Uint8Array;
-    try {
-      sigBytes = bs58.decode(txSignature);
-      if (sigBytes.length !== 64) {
-        throw new Error("Invalid signature length");
-      }
-    } catch {
-      res.status(402).json({ error: "Invalid base58 Solana transaction signature" });
-      return { ok: false, paymentRef: Buffer.alloc(64, 0) };
-    }
-
-    const conn = rpcConnection || new Connection(rpcUrl, "confirmed");
-    let txInfo: any = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      txInfo = await conn.getTransaction(txSignature, {
-        commitment: "confirmed",
-        maxSupportedTransactionVersion: 0,
-      });
-      if (txInfo) break;
-      await new Promise((r) => setTimeout(r, 800));
-    }
-
-    if (!txInfo || txInfo.meta?.err) {
-      res.status(402).json({
-        error: "Payment transaction not confirmed or failed on Solana",
-        txSignature,
-      });
-      return { ok: false, paymentRef: Buffer.alloc(64, 0) };
-    }
-
-    // Verify recipient received at least priceLamports
-    const accountKeys = txInfo.transaction.message.getAccountKeys
-      ? txInfo.transaction.message.getAccountKeys().staticAccountKeys
-      : txInfo.transaction.message.accountKeys;
-    const payToIdx = accountKeys.findIndex((k: PublicKey) =>
-      k.equals(payToKeypair.publicKey)
-    );
-    const minRequired = BigInt(priceStr);
-    const received =
-      payToIdx >= 0
-        ? BigInt(txInfo.meta.postBalances[payToIdx] - txInfo.meta.preBalances[payToIdx])
-        : 0n;
-
-    if (received < minRequired) {
-      res.status(402).json({
-        error: `Insufficient SOL payment to ${payToKeypair.publicKey.toBase58()}: expected ${minRequired}, received ${received}`,
-        txSignature,
-      });
-      return { ok: false, paymentRef: Buffer.alloc(64, 0) };
-    }
-
-    usedSignatures.add(txSignature);
-    if (usedSignatures.size > 5000) {
-      const oldest = usedSignatures.values().next().value;
-      if (oldest) usedSignatures.delete(oldest);
-    }
-
-    return { ok: true, paymentRef: Buffer.from(sigBytes), paymentTxSig: txSignature };
-  }
 
   function buildAndSignReceipt(params: {
     signerKeypair: Keypair;
@@ -298,7 +194,7 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
       requestHash,
       responseHash,
       paymentReference: params.paymentRef,
-      price: new BN(priceLamports.toString()),
+      price: new BN(priceLamportsStr),
       timestamp: currentUnixTime(),
       nonce: ++nonceCounter,
     };
@@ -311,6 +207,7 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
       receiptBase64: canonicalBytes.toString("base64"),
       signatureBase64: signature.toString("base64"),
       responseData: params.responseData,
+      specJson: SPEC_CANONICAL_JSON,
     });
     if (receiptCache.size > 500) {
       const oldest = receiptCache.keys().next().value;
@@ -335,7 +232,16 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
       return;
     }
 
-    const payment = await verifyOrChallengeX402(req, res, signerKeypair);
+    const payment = await verifyOrChallengeX402({
+      req,
+      res,
+      payTo: signerKeypair.publicKey,
+      priceLamports: priceLamportsStr,
+      requirePayment,
+      rpcUrl,
+      connection: rpcConnection,
+      usedSignatures,
+    });
     if (!payment.ok) return;
 
     const { canonicalBytes, signature, receiptHashHex } = buildAndSignReceipt({
@@ -358,7 +264,7 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
           txSignature: payment.paymentTxSig,
           network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
           payTo: signerKeypair.publicKey.toBase58(),
-          amount: priceLamports.toString(),
+          amount: priceLamportsStr,
         })
       ).toString("base64");
       res.setHeader("PAYMENT-RESPONSE", paymentResp);
@@ -375,13 +281,12 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
         ? {
             txSignature: payment.paymentTxSig,
             payTo: signerKeypair.publicKey.toBase58(),
-            amountLamports: Number(priceLamports.toString()),
+            amountLamports: priceLamportsStr,
           }
         : undefined,
     });
   }
 
-  // Honest endpoint: /weather
   app.get("/weather", async (req: Request, res: Response) => {
     await handleWeatherRoute(req, res, providerKeypair, {
       city: "SolanaBeach",
@@ -391,7 +296,6 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     });
   });
 
-  // Lying endpoint (Gross liar): /weather-lying
   app.get("/weather-lying", async (req: Request, res: Response) => {
     await handleWeatherRoute(req, res, lyingProviderKeypair, {
       city: "SolanaBeach",
@@ -401,7 +305,6 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     });
   });
 
-  // Subtle liar endpoint (Plausible but wrong): /weather-plausible-wrong
   app.get("/weather-plausible-wrong", async (req: Request, res: Response) => {
     await handleWeatherRoute(req, res, subtleProviderKeypair, {
       city: "SolanaBeach",
@@ -411,13 +314,32 @@ export function createProviderApp(options: ProviderAppOptions): express.Applicat
     });
   });
 
-  // Arbiter auto-resolve endpoint
+  // Public Provider Registry + Hosted Test Route + Proxy
+  app.use(
+    "/providers",
+    createRegistryRouter({
+      rpcUrl,
+      priceLamports: priceLamportsStr,
+      requirePayment,
+      usedSignatures,
+      currentUnixTime,
+      registry: providerRegistry,
+      seededWallets: {
+        honest: providerKeypair.publicKey.toBase58(),
+        lying: lyingProviderKeypair.publicKey.toBase58(),
+        subtle: subtleProviderKeypair.publicKey.toBase58(),
+      },
+    })
+  );
+
+  // Arbiter auth, audit preview, and resolution endpoints
   app.use(
     "/arbiter",
     createArbiterRouter({
       rpcUrl,
       arbiterKeypair: options.arbiterKeypair,
       receiptCache,
+      providerRegistry,
     })
   );
 
